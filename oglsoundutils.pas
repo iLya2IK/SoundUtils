@@ -191,6 +191,9 @@ type
   function  WriteData(Buffer : Pointer;
                  Count : ISoundFrameSize;
                  Par : Pointer) : ISoundFrameSize;
+  function  WriteDataToStream(Stream : TStream;
+                 Count : ISoundFrameSize;
+                 Par : Pointer) : ISoundFrameSize;
   //method to encode header/comments
   procedure WriteHeader(Par : Pointer);
   //method to close encoder (write last packet/flush/finalize encoder)
@@ -213,6 +216,9 @@ type
 
   //method to read decoded data
   function  ReadData(Buffer : Pointer;
+                     Count : ISoundFrameSize;
+                     Par : Pointer) : ISoundFrameSize;
+  function  ReadDataToStream(Stream : TStream;
                      Count : ISoundFrameSize;
                      Par : Pointer) : ISoundFrameSize;
   //method to reset decoder
@@ -375,6 +381,9 @@ type
     function  WriteData({%H-}Buffer : Pointer;
                    {%H-}Count : ISoundFrameSize;
                    {%H-}Par : Pointer) : ISoundFrameSize; virtual;
+    function  WriteDataToStream({%H-}Stream : TStream;
+                   {%H-}Count : ISoundFrameSize;
+                   {%H-}Par : Pointer) : ISoundFrameSize; virtual;
     //method to encode header/comments
     procedure WriteHeader({%H-}Par : Pointer); virtual;
     //method to close encoder (write last packet/flush/finalize encoder)
@@ -396,6 +405,9 @@ type
   public
     //method to read decoded data
     function  ReadData({%H-}Buffer : Pointer;
+                   {%H-}Count : ISoundFrameSize;
+                   {%H-}Par : Pointer) : ISoundFrameSize; virtual;
+    function  ReadDataToStream({%H-}Stream : TStream;
                    {%H-}Count : ISoundFrameSize;
                    {%H-}Par : Pointer) : ISoundFrameSize; virtual;
     //method to reset decoder
@@ -919,6 +931,12 @@ begin
   Result := TOGLSound.NewErrorFrame;
 end;
 
+function TSoundAbstractDecoder.ReadDataToStream(Stream : TStream;
+  Count : ISoundFrameSize; Par : Pointer) : ISoundFrameSize;
+begin
+  Result := TOGLSound.NewErrorFrame;
+end;
+
 procedure TSoundAbstractDecoder.ResetToStart;
 begin
   // do nothing
@@ -953,6 +971,12 @@ end;
 
 function TSoundAbstractEncoder.WriteData(Buffer : Pointer; Count : ISoundFrameSize;
   Par : Pointer) : ISoundFrameSize;
+begin
+  Result := TOGLSound.NewErrorFrame;
+end;
+
+function TSoundAbstractEncoder.WriteDataToStream(Stream : TStream;
+  Count : ISoundFrameSize; Par : Pointer) : ISoundFrameSize;
 begin
   Result := TOGLSound.NewErrorFrame;
 end;
