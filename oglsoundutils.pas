@@ -117,24 +117,26 @@ type
   property ByteDepth  : Byte read GetByteDepth write SetByteDepth;
   end;
 
-  { ISoundDataWriter }
-
-  ISoundDataWriter = interface
-  ['{5C1D2BE5-36BC-4DE3-8C33-A716D406F10B}']
+  ISoundDataStream = interface
+  ['{DD96846C-DF94-4CB1-B578-6C6081D4D8F8}']
   //method to write encoded data
   function DoWrite(Buffer : Pointer; BufferSize : Integer) : Integer;
-  end;
-
-  { ISoundDataReader }
-
-  ISoundDataReader = interface
-  ['{22230C39-08BD-4A4D-A918-B063D6EDAF6D}']
   //method to read encoded data from stream
   function DoRead(_ptr : Pointer; _nbytes : Integer) : Integer;
-  //method to seek in encoded stream
+  //method to seek in encoded/decoded stream
   function DoSeek(_offset:Int64; _whence:Integer): Integer;
-  //method to tell current position in encoded stream
+  //method to tell current position in encoded/decoded stream
   function DoTell:Int64;
+  //method to get size of data
+  function Size : Int64;
+  //is reader/writer support seeking
+  function Seekable : Boolean;
+  //is writer support reading
+  function Readable : Boolean;
+  //is reader support writing
+  function Writeable : Boolean; virtual;
+  //is end of the stream has been reached
+  function EoS : Boolean;
   end;
 
   { ISoundEncDec }
@@ -154,8 +156,12 @@ type
   procedure SetFrequency({%H-}AValue : Cardinal);
   procedure SetSampleSize({%H-}AValue : TSoundSampleSize);
 
+  procedure InitStream(aSrc : ISoundDataStream);
+  function DataStream : ISoundDataStream;
+
   procedure Done;
 
+  function Comments : ISoundComment;
   function InternalType : TSoundEncDecType;
   function Ready : Boolean;
 
@@ -184,9 +190,6 @@ type
   procedure Init(aProps : ISoundEncoderProps;
                  aComments : ISoundComment);
 
-  procedure InitWriter(aSrc : ISoundDataWriter);
-  function Writer : ISoundDataWriter;
-
   //method to encode raw pcm data
   function  WriteData(Buffer : Pointer;
                  Count : ISoundFrameSize;
@@ -211,9 +214,6 @@ type
   ['{8D96AD54-0E37-43FE-A37B-7170F4AAF0B6}']
   procedure Init;
 
-  procedure InitReader(aSrc : ISoundDataReader);
-  function Reader : ISoundDataReader;
-
   //method to read decoded data
   function  ReadData(Buffer : Pointer;
                      Count : ISoundFrameSize;
@@ -223,6 +223,24 @@ type
                      Par : Pointer) : ISoundFrameSize;
   //method to reset decoder
   procedure ResetToStart;
+  //method to seek a byte offset
+  procedure RawSeek(pos : Int64);
+  //method to seek a specified PCM offset
+  procedure SampleSeek(pos : Integer);
+  //method to seek a specified time offset in seconds
+  procedure TimeSeek(pos : Double);
+  //method to tell a byte offset
+  function RawTell : Int64; virtual;
+  //method to seek a specified PCM offset
+  function SampleTell : Integer; virtual;
+  //method to seek a specified time offset in seconds
+  function TimeTell : Double; virtual;
+  //method to tell total byte size
+  function RawTotal : Int64;
+  //method to tell total samples count
+  function SampleTotal : Integer;
+  //method to tell total time length in seconds
+  function TimeTotal : Double;
   end;
 
   { TSoundEncoderProps }
@@ -332,6 +350,8 @@ type
   { TSoundAbstractEncDec }
 
   TSoundAbstractEncDec = class(TInterfacedObject, ISoundEncDec)
+  private
+    fDataStream : ISoundDataStream;
   protected
     function GetBitdepth : Cardinal; virtual;
     function GetBitrate : Cardinal; virtual; abstract;
@@ -345,6 +365,9 @@ type
     procedure SetChannels({%H-}AValue : Cardinal); virtual;
     procedure SetFrequency({%H-}AValue : Cardinal); virtual;
     procedure SetSampleSize({%H-}AValue : TSoundSampleSize); virtual;
+
+    procedure InitStream(aSrc : ISoundDataStream); virtual;
+    function DataStream : ISoundDataStream; virtual;
 
     procedure Done; virtual; abstract;
   public
@@ -362,8 +385,6 @@ type
   { TSoundAbstractEncoder }
 
   TSoundAbstractEncoder = class(TSoundAbstractEncDec, ISoundEncoder)
-  private
-    fWriteImplementer : ISoundDataWriter;
   protected
     function GetMode : TSoundEncoderMode; virtual; abstract;
     function GetQuality : Single; virtual; abstract;
@@ -372,8 +393,6 @@ type
 
     procedure Init({%H-}aProps : ISoundEncoderProps;
                    {%H-}aComment : ISoundComment); virtual; abstract;
-    procedure InitWriter(aSrc : ISoundDataWriter); virtual;
-    function Writer : ISoundDataWriter; virtual;
   public
     function InternalType : TSoundEncDecType; override;
 
@@ -395,13 +414,8 @@ type
   { TSoundAbstractDecoder }
 
   TSoundAbstractDecoder = class(TSoundAbstractEncDec, ISoundDecoder)
-  private
-    fReadImplementer : ISoundDataReader;
   protected
     procedure Init; virtual; abstract;
-
-    procedure InitReader(aSrc : ISoundDataReader); virtual;
-    function Reader : ISoundDataReader; virtual;
   public
     //method to read decoded data
     function  ReadData({%H-}Buffer : Pointer;
@@ -412,13 +426,33 @@ type
                    {%H-}Par : Pointer) : ISoundFrameSize; virtual;
     //method to reset decoder
     procedure ResetToStart; virtual;
+    //methods to seek position
+    //method to seek a byte offset
+    procedure RawSeek(pos : Int64); virtual;
+    //method to seek a specified PCM offset
+    procedure SampleSeek(pos : Integer); virtual;
+    //method to seek a specified time offset in seconds
+    procedure TimeSeek(pos : Double); virtual;
+    //methods to tell current pos
+    //method to tell a byte offset
+    function RawTell : Int64; virtual;
+    //method to seek a specified PCM offset
+    function SampleTell : Integer; virtual;
+    //method to seek a specified time offset in seconds
+    function TimeTell : Double; virtual;
+    //method to tell total byte size
+    function RawTotal : Int64; virtual;
+    //method to tell total samples count
+    function SampleTotal : Integer; virtual;
+    //method to tell total time length in seconds
+    function TimeTotal : Double; virtual;
 
     function InternalType : TSoundEncDecType; override;
   end;
 
-  { TSoundStreamReadWrite }
+  { TSoundDataStream }
 
-  TSoundStreamReadWrite = class(TInterfacedObject)
+  TSoundDataStream = class(TInterfacedObject, ISoundDataStream)
   private
     fStream : TStream;
   protected
@@ -426,36 +460,68 @@ type
     function GetStream : TStream; virtual;
   public
     constructor Create(aStream : TStream);
-
-    property Stream : TStream read GetStream write SetStream;
-  end;
-
-  { TSoundStreamDataWriter }
-
-  TSoundStreamDataWriter = class(TSoundStreamReadWrite, ISoundDataWriter)
-  public
     //method to write encoded data
     function DoWrite(Buffer : Pointer; BufferSize : Integer) : Integer; virtual;
-  end;
-
-  { TSoundStreamDataReader }
-
-  TSoundStreamDataReader = class(TSoundStreamReadWrite, ISoundDataReader)
-  public
     //method to read encoded data from stream
     function DoRead(_ptr : Pointer; _nbytes : Integer) : Integer; virtual;
     //method to seek in encoded stream
     function DoSeek(_offset:Int64; _whence:Integer): Integer; virtual;
     //method to tell current position in encoded stream
     function DoTell:Int64; virtual;
+    //method to get size of data
+    function Size : Int64; virtual;
+    //is reader/writer support seeking
+    function Seekable : Boolean; virtual;
+    //is writer support reading
+    function Readable : Boolean; virtual;
+    //is reader support writing
+    function Writeable : Boolean; virtual;
+    //is end of the stream has been reached
+    function EoS : Boolean; virtual;
+
+    property Stream : TStream read GetStream write SetStream;
   end;
 
-  { TSoundStreamForwardDataReader }
+  { TSoundDataStreamForward }
 
-  TSoundStreamForwardDataReader = class(TSoundStreamDataReader)
+  TSoundDataStreamForward = class(TSoundDataStream)
   public
     function DoSeek(_offset:Int64; _whence:Integer): Integer; override;
     function DoTell:Int64; override;
+    function Size : Int64; override;
+    function Seekable : Boolean; override;
+  end;
+
+  { TSoundDataStreamWriteOnly }
+
+  TSoundDataStreamWriteOnly = class(TSoundDataStream)
+  public
+    function DoRead(_ptr : Pointer; _nbytes : Integer) : Integer; override;
+    function Readable : Boolean; override;
+  end;
+
+  { TSoundDataStreamReadOnly }
+
+  TSoundDataStreamReadOnly = class(TSoundDataStream)
+  public
+    function DoWrite(Buffer : Pointer; BufferSize : Integer) : Integer; override;
+    function Writeable : Boolean; override;
+  end;
+
+  { TSoundDataStreamWriteOnlyForward }
+
+  TSoundDataStreamWriteOnlyForward = class(TSoundDataStreamForward)
+  public
+    function DoRead(_ptr : Pointer; _nbytes : Integer) : Integer; override;
+    function Readable : Boolean; override;
+  end;
+
+  { TSoundDataStreamReadOnlyForward }
+
+  TSoundDataStreamReadOnlyForward = class(TSoundDataStreamForward)
+  public
+    function DoWrite(Buffer : Pointer; BufferSize : Integer) : Integer; override;
+    function Writeable : Boolean; override;
   end;
 
   { TSoundFile }
@@ -463,6 +529,7 @@ type
   TSoundFile = class
   private
     fStream: TStream;
+    fDataLimits : TSoundDataLimits;
 
     //encoder/decoder spec
     fEncDec : ISoundEncDec;
@@ -473,14 +540,19 @@ type
                    aComments : ISoundComment) : ISoundEncoder; virtual;
                                                                 abstract;
     function InitDecoder : ISoundDecoder; virtual; abstract;
+
+    class function DefaultEncoderDataLimits : TSoundDataLimits; virtual;
+    class function DefaultDecoderDataLimits : TSoundDataLimits; virtual;
   public
     destructor Destroy; override;
 
     function Stream : TStream; virtual;
+    function DataLimits : TSoundDataLimits; virtual;
 
     function LoadFromFile(const aFileName : String; const aInMemory : Boolean
       ) : Boolean; virtual;
-    function LoadFromStream(Str : TStream) : Boolean; virtual;
+    function LoadFromStream(Str : TStream; aDataLimits : TSoundDataLimits) : Boolean; virtual;
+    function LoadFromStream(Str : TStream) : Boolean;
     function ReadData(Buffer : Pointer;
                       aFrameSize : ISoundFrameSize;
                       Ptr : Pointer) : ISoundFrameSize; virtual;
@@ -491,9 +563,12 @@ type
     function SaveToFile(const aFileName : String;
       aProps : ISoundEncoderProps;
       aComments : ISoundComment) : Boolean; virtual;
-    function SaveToStream(Str : TStream;
+    function SaveToStream(Str : TStream; aDataLimits : TSoundDataLimits;
       aProps : ISoundEncoderProps;
       aComments : ISoundComment) : Boolean; virtual;
+    function SaveToStream(Str : TStream;
+      aProps : ISoundEncoderProps;
+      aComments : ISoundComment) : Boolean;
     function WriteData(Buffer : Pointer;
                        aFrameSize : ISoundFrameSize;
                        Ptr : Pointer) : ISoundFrameSize; virtual;
@@ -508,6 +583,8 @@ type
     function Channels : Cardinal; virtual;
     function Version  : Cardinal; virtual;
   end;
+
+  EOGLSound = class(Exception);
 
   { TOGLSound }
 
@@ -527,9 +604,7 @@ type
     class function NewEmptyFrame(aFreq : Cardinal; aChannels : Cardinal;
                          aSampleSize : TSoundSampleSize) : ISoundFrameSize; overload;
 
-    class function NewStreamWriter(aStream : TStream) : ISoundDataWriter;
-    class function NewStreamReader(aStream : TStream) : ISoundDataReader;
-    class function NewStreamForwardReader(aStream : TStream) : ISoundDataReader;
+    class function NewDataStream(aStream : TStream; aDataLimits : TSoundDataLimits) : ISoundDataStream;
 
     class function BitdepthToSampleSize(bitdepth : Byte) : TSoundSampleSize;
     class function SampleSizeToBitdepth(samplsz : TSoundSampleSize) : Byte;
@@ -540,16 +615,74 @@ type
     class function EncProps(const Vals : Array of Variant) : ISoundEncoderProps;
 
     // Encoder properties
-    class function PROP_MODE : Cardinal; inline;
-    class function PROP_CHANNELS : Cardinal; inline;
-    class function PROP_FREQUENCY : Cardinal; inline;
-    class function PROP_BITRATE : Cardinal; inline;
-    class function PROP_SAMPLE_SIZE : Cardinal; inline;
-    class function PROP_QUALITY : Cardinal; inline;
+    const PROP_MODE : Cardinal         = $001;
+    const PROP_CHANNELS : Cardinal     = $002;
+    const PROP_FREQUENCY : Cardinal    = $003;
+    const PROP_BITRATE : Cardinal      = $004;
+    const PROP_SAMPLE_SIZE : Cardinal  = $005;
+    const PROP_QUALITY : Cardinal      = $006;
   end;
 
 
 implementation
+
+const
+  esSeekingNotSupported : String = 'Seeking is not supported for this data source';
+  esRawSeekingNotImplemented : String = 'Raw seeking is not implemented by decoder';
+  esPCMSeekingNotImplemented : String = 'PCM seeking is not implemented by decoder';
+  esTimeSeekingNotImplemented : String = 'Time seeking is not implemented by decoder';
+
+{ TSoundDataStreamReadOnlyForward }
+
+function TSoundDataStreamReadOnlyForward.DoWrite(Buffer : Pointer;
+  BufferSize : Integer) : Integer;
+begin
+  Result := -1;
+end;
+
+function TSoundDataStreamReadOnlyForward.Writeable : Boolean;
+begin
+  Result := False;
+end;
+
+{ TSoundDataStreamWriteOnlyForward }
+
+function TSoundDataStreamWriteOnlyForward.DoRead(_ptr : Pointer;
+  _nbytes : Integer) : Integer;
+begin
+  Result := -1;
+end;
+
+function TSoundDataStreamWriteOnlyForward.Readable : Boolean;
+begin
+  Result := False;
+end;
+
+{ TSoundDataStreamReadOnly }
+
+function TSoundDataStreamReadOnly.DoWrite(Buffer : Pointer; BufferSize : Integer
+  ) : Integer;
+begin
+  Result := -1;
+end;
+
+function TSoundDataStreamReadOnly.Writeable : Boolean;
+begin
+  Result := False;
+end;
+
+{ TSoundDataStreamWriteOnly }
+
+function TSoundDataStreamWriteOnly.DoRead(_ptr : Pointer; _nbytes : Integer
+  ) : Integer;
+begin
+  Result := -1;
+end;
+
+function TSoundDataStreamWriteOnly.Readable : Boolean;
+begin
+  Result := false;
+end;
 
 { TSoundEncoderProps }
 
@@ -618,41 +751,36 @@ begin
   Result := FindIndexOf(AValue) >= 0;
 end;
 
-{ TSoundStreamReadWrite }
+{ TSoundDataStream }
 
-procedure TSoundStreamReadWrite.SetStream(aStream : TStream);
+procedure TSoundDataStream.SetStream(aStream : TStream);
 begin
   fStream := aStream;
 end;
 
-function TSoundStreamReadWrite.GetStream : TStream;
+function TSoundDataStream.GetStream : TStream;
 begin
   Result := fStream;
 end;
 
-constructor TSoundStreamReadWrite.Create(aStream : TStream);
+constructor TSoundDataStream.Create(aStream : TStream);
 begin
   fStream := aStream;
 end;
 
-{ TSoundStreamForwardDataReader }
-
-function TSoundStreamForwardDataReader.DoSeek(_offset : Int64; _whence : Integer
+function TSoundDataStream.DoWrite(Buffer : Pointer; BufferSize : Integer
   ) : Integer;
 begin
-  Result := -1;
+  if (BufferSize < 0) then Exit(-1);
+  if not (Assigned(Buffer) and (BufferSize > 0)) then Exit(-1);
+  fStream.Write(Buffer^, BufferSize);
+  Result := 0;
 end;
 
-function TSoundStreamForwardDataReader.DoTell : Int64;
+function TSoundDataStream.DoRead(_ptr : Pointer; _nbytes : Integer
+  ) : Integer;
 begin
-  Result := -1;
-end;
-
-{ TSoundStreamDataReader }
-
-function TSoundStreamDataReader.DoRead(_ptr : Pointer; _nbytes : Integer) : Integer;
-begin
-  if (_nbytes <= 0) then begin Result := 0; Exit; end;
+  if (_nbytes <= 0) then Exit(0);
   try
     Result := Int64(fStream.Read(_ptr^, _nbytes));
   except
@@ -660,7 +788,8 @@ begin
   end;
 end;
 
-function TSoundStreamDataReader.DoSeek(_offset : Int64; _whence : Integer) : Integer;
+function TSoundDataStream.DoSeek(_offset : Int64; _whence : Integer
+  ) : Integer;
 begin
   try
     with fStream do
@@ -675,7 +804,7 @@ begin
   end;
 end;
 
-function TSoundStreamDataReader.DoTell : Int64;
+function TSoundDataStream.DoTell : Int64;
 begin
   try
     result := fStream.Position;
@@ -684,16 +813,61 @@ begin
   end;
 end;
 
-{ TSoundStreamDataWriter }
+function TSoundDataStream.Size : Int64;
+begin
+  try
+    result := fStream.Position;
+  except
+    result := -1;
+  end;
+end;
 
-function TSoundStreamDataWriter.DoWrite(Buffer : Pointer; BufferSize : Integer
+function TSoundDataStream.Seekable : Boolean;
+begin
+  Result := True;
+end;
+
+function TSoundDataStream.Readable : Boolean;
+begin
+  Result := True;
+end;
+
+function TSoundDataStream.Writeable : Boolean;
+begin
+  Result := True;
+end;
+
+function TSoundDataStream.EoS : Boolean;
+begin
+  if Seekable then
+    Result := fStream.Position >= fStream.Size
+  else
+    Result := false;
+end;
+
+{ TSoundDataStreamForward }
+
+function TSoundDataStreamForward.DoSeek(_offset : Int64; _whence : Integer
   ) : Integer;
 begin
-  if (BufferSize < 0) then Exit(-1);
-  if not (Assigned(Buffer) and (BufferSize > 0)) then Exit(-1);
-  fStream.Write(Buffer^, BufferSize);
-  Result := 0;
+  Result := -1;
 end;
+
+function TSoundDataStreamForward.DoTell : Int64;
+begin
+  Result := -1;
+end;
+
+function TSoundDataStreamForward.Size : Int64;
+begin
+  Result := -1;
+end;
+
+function TSoundDataStreamForward.Seekable : Boolean;
+begin
+  Result := False;
+end;
+
 
 { TSoundFile }
 
@@ -710,6 +884,16 @@ begin
     Encoder.WriteHeader(nil);
 end;
 
+class function TSoundFile.DefaultEncoderDataLimits : TSoundDataLimits;
+begin
+  Result := [sdpReadOnly];
+end;
+
+class function TSoundFile.DefaultDecoderDataLimits : TSoundDataLimits;
+begin
+  Result := [sdpWriteOnly];
+end;
+
 destructor TSoundFile.Destroy;
 begin
   Clean;
@@ -721,15 +905,24 @@ begin
   Result := fStream;
 end;
 
+function TSoundFile.DataLimits : TSoundDataLimits;
+begin
+  Result := fDataLimits;
+end;
+
 function TSoundFile.LoadFromFile(const aFileName : String;
   const aInMemory : Boolean) : Boolean;
 var
   cFilestream : TFileStream;
   cStr : TStream;
+  cMode : Cardinal;
 begin
+  if sdpReadOnly in DefaultEncoderDataLimits then
+    cMode := fmOpenRead else
+    cMode := fmOpenReadWrite;
   if aInMemory then
   begin
-    cFilestream := TFileStream.Create(aFileName, fmOpenRead);
+    cFilestream := TFileStream.Create(aFileName, cMode);
     if Assigned(cFilestream) then
     begin
       try
@@ -743,16 +936,18 @@ begin
       cStr := nil;
   end
   else
-    cStr := TFileStream.Create(aFileName, fmOpenRead);
+    cStr := TFileStream.Create(aFileName, cMode);
 
-  Result := LoadFromStream(cStr);
+  Result := LoadFromStream(cStr, DefaultEncoderDataLimits);
 end;
 
-function TSoundFile.LoadFromStream(Str : TStream) : Boolean;
+function TSoundFile.LoadFromStream(Str : TStream; aDataLimits : TSoundDataLimits
+  ) : Boolean;
 begin
   Clean;
 
   fStream := Str;
+  fDataLimits := aDataLimits;
 
   try
     fEncDec :=  InitDecoder;
@@ -760,6 +955,11 @@ begin
   except
     on e : Exception do Result := false;
   end;
+end;
+
+function TSoundFile.LoadFromStream(Str : TStream) : Boolean;
+begin
+  Result := LoadFromStream(Str, DefaultDecoderDataLimits);
 end;
 
 function TSoundFile.ReadData(Buffer : Pointer; aFrameSize : ISoundFrameSize;
@@ -805,19 +1005,24 @@ function TSoundFile.SaveToFile(const aFileName : String;
   aProps : ISoundEncoderProps;  aComments : ISoundComment) : Boolean;
 var
   Str : TFileStream;
+  cMode : Cardinal;
 begin
-  Str := TFileStream.Create(aFileName, fmOpenWrite or fmCreate);
+  if sdpWriteOnly in DefaultEncoderDataLimits then
+    cMode := fmOpenWrite else
+    cMode := fmOpenReadWrite;
+  Str := TFileStream.Create(aFileName, cMode or fmCreate);
   if Assigned(Str) then
-    Result := SaveToStream(Str, aProps, aComments) else
-      Result := false;
+    Result := SaveToStream(Str, DefaultDecoderDataLimits, aProps, aComments) else
+    Result := false;
 end;
 
-function TSoundFile.SaveToStream(Str : TStream; aProps : ISoundEncoderProps;
-  aComments : ISoundComment) : Boolean;
+function TSoundFile.SaveToStream(Str : TStream; aDataLimits : TSoundDataLimits;
+  aProps : ISoundEncoderProps; aComments : ISoundComment) : Boolean;
 begin
   Clean;
 
   fStream := Str;
+  fDataLimits := aDataLimits;
 
   try
     try
@@ -830,6 +1035,12 @@ begin
     if Result then
       WriteHeader;
   end;
+end;
+
+function TSoundFile.SaveToStream(Str : TStream; aProps : ISoundEncoderProps;
+  aComments : ISoundComment) : Boolean;
+begin
+  Result := SaveToStream(Str, DefaultEncoderDataLimits, aProps, aComments);
 end;
 
 function TSoundFile.WriteData(Buffer : Pointer; aFrameSize : ISoundFrameSize;
@@ -915,15 +1126,6 @@ end;
 
 { TSoundAbstractDecoder }
 
-procedure TSoundAbstractDecoder.InitReader(aSrc : ISoundDataReader);
-begin
-  fReadImplementer := aSrc;
-end;
-
-function TSoundAbstractDecoder.Reader : ISoundDataReader;
-begin
-  Result := fReadImplementer;
-end;
 
 function TSoundAbstractDecoder.ReadData(Buffer : Pointer;
   Count : ISoundFrameSize; Par : Pointer) : ISoundFrameSize;
@@ -942,6 +1144,63 @@ begin
   // do nothing
 end;
 
+procedure TSoundAbstractDecoder.RawSeek(pos : Int64);
+begin
+  if DataStream.Seekable then
+    raise EOGLSound.Create(esRawSeekingNotImplemented) else
+    raise EOGLSound.Create(esSeekingNotSupported);
+end;
+
+procedure TSoundAbstractDecoder.SampleSeek(pos : Integer);
+begin
+  if DataStream.Seekable then
+    raise EOGLSound.Create(esPCMSeekingNotImplemented) else
+    raise EOGLSound.Create(esSeekingNotSupported);
+end;
+
+procedure TSoundAbstractDecoder.TimeSeek(pos : Double);
+begin
+  if DataStream.Seekable then
+    raise EOGLSound.Create(esTimeSeekingNotImplemented) else
+    raise EOGLSound.Create(esSeekingNotSupported);
+end;
+
+function TSoundAbstractDecoder.RawTell : Int64;
+begin
+  if DataStream.Seekable then
+    raise EOGLSound.Create(esRawSeekingNotImplemented) else
+    raise EOGLSound.Create(esSeekingNotSupported);
+end;
+
+function TSoundAbstractDecoder.SampleTell : Integer;
+begin
+  if DataStream.Seekable then
+    raise EOGLSound.Create(esPCMSeekingNotImplemented) else
+    raise EOGLSound.Create(esSeekingNotSupported);
+end;
+
+function TSoundAbstractDecoder.TimeTell : Double;
+begin
+  if DataStream.Seekable then
+    raise EOGLSound.Create(esTimeSeekingNotImplemented) else
+    raise EOGLSound.Create(esSeekingNotSupported);
+end;
+
+function TSoundAbstractDecoder.RawTotal : Int64;
+begin
+  Result := 0;
+end;
+
+function TSoundAbstractDecoder.SampleTotal : Integer;
+begin
+  Result := 0;
+end;
+
+function TSoundAbstractDecoder.TimeTotal : Double;
+begin
+  Result := 0.0;
+end;
+
 function TSoundAbstractDecoder.InternalType : TSoundEncDecType;
 begin
   Result := edtDecoder;
@@ -957,16 +1216,6 @@ end;
 procedure TSoundAbstractEncoder.SetQuality(AValue : Single);
 begin
   //do nothing
-end;
-
-procedure TSoundAbstractEncoder.InitWriter(aSrc : ISoundDataWriter);
-begin
-  fWriteImplementer := aSrc;
-end;
-
-function TSoundAbstractEncoder.Writer : ISoundDataWriter;
-begin
-  Result := fWriteImplementer;
 end;
 
 function TSoundAbstractEncoder.WriteData(Buffer : Pointer; Count : ISoundFrameSize;
@@ -1006,6 +1255,16 @@ end;
 procedure TSoundAbstractEncDec.SetSampleSize(AValue : TSoundSampleSize);
 begin
   //do nothing
+end;
+
+procedure TSoundAbstractEncDec.InitStream(aSrc : ISoundDataStream);
+begin
+  fDataStream := aSrc;
+end;
+
+function TSoundAbstractEncDec.DataStream : ISoundDataStream;
+begin
+  Result := fDataStream;
 end;
 
 function TSoundAbstractEncDec.EmptyFrame : ISoundFrameSize;
@@ -1100,20 +1359,50 @@ begin
   Result := TSoundFrameSize.CreateEmpty(aFreq, aChannels, aSampleSize) as ISoundFrameSize;
 end;
 
-class function TOGLSound.NewStreamWriter(aStream : TStream) : ISoundDataWriter;
+class function TOGLSound.NewDataStream(aStream : TStream;
+  aDataLimits : TSoundDataLimits) : ISoundDataStream;
+var seekable : Boolean;
+    {%H-}sz : Int64;
 begin
-  Result := TSoundStreamDataWriter.Create(aStream) as ISoundDataWriter;
-end;
+  if sdpForceNotSeekable in aDataLimits then
+  begin
+    seekable := false;
+  end else
+  begin
+    try
+      {$OPTIMIZATION OFF}
+      sz := aStream.Size;
+      {$OPTIMIZATION DEFAULT}
+      seekable := true;
+    except
+      on e : EStreamError do
+      begin
+        // stream is not seekable
+        seekable := false;
+      end;
+    end;
+  end;
 
-class function TOGLSound.NewStreamReader(aStream : TStream) : ISoundDataReader;
-begin
-  Result := TSoundStreamDataReader.Create(aStream) as ISoundDataReader;
-end;
-
-class function TOGLSound.NewStreamForwardReader(aStream : TStream
-  ) : ISoundDataReader;
-begin
-  Result := TSoundStreamForwardDataReader.Create(aStream) as ISoundDataReader;
+  if seekable then
+  begin
+    if sdpWriteOnly in aDataLimits then
+      Result := TSoundDataStreamWriteOnly.Create(aStream) as ISoundDataStream
+    else
+    if sdpReadOnly in aDataLimits then
+      Result := TSoundDataStreamReadOnly.Create(aStream) as ISoundDataStream
+    else
+      Result := TSoundDataStream.Create(aStream) as ISoundDataStream;
+  end
+  else
+  begin
+    if sdpWriteOnly in aDataLimits then
+      Result := TSoundDataStreamWriteOnlyForward.Create(aStream) as ISoundDataStream
+    else
+    if sdpReadOnly in aDataLimits then
+      Result := TSoundDataStreamReadOnlyForward.Create(aStream) as ISoundDataStream
+    else
+      Result := TSoundDataStreamForward.Create(aStream) as ISoundDataStream;
+  end;
 end;
 
 class function TOGLSound.BitdepthToSampleSize(bitdepth : Byte
@@ -1167,36 +1456,6 @@ begin
     Result.Add(Vals[i], Vals[i+1]);
     Inc(i, 2);
   end;
-end;
-
-class function TOGLSound.PROP_MODE : Cardinal;
-begin
-  Result := $001;
-end;
-
-class function TOGLSound.PROP_CHANNELS : Cardinal;
-begin
-  Result := $002;
-end;
-
-class function TOGLSound.PROP_FREQUENCY : Cardinal;
-begin
-  Result := $003;
-end;
-
-class function TOGLSound.PROP_BITRATE : Cardinal;
-begin
-  Result := $004;
-end;
-
-class function TOGLSound.PROP_SAMPLE_SIZE : Cardinal;
-begin
-  Result := $005;
-end;
-
-class function TOGLSound.PROP_QUALITY : Cardinal;
-begin
-  Result := $006;
 end;
 
 { TSoundFrameSize }

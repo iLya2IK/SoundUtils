@@ -22,6 +22,8 @@ type
   TSoundSampleSize = (ss8bit, ss16bit, ss32bit, ssFloat);
   TSoundEncDecType = (edtEncoder, edtDecoder);
   TSoundEncoderMode = (oemCBR, oemVBR);
+  TSoundDataLimit  = (sdpForceNotSeekable, sdpReadOnly, sdpWriteOnly);
+  TSoundDataLimits = set of TSoundDataLimit;
 
   { ISoundComment }
 
