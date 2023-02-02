@@ -34,11 +34,24 @@ type
   procedure Init;
   procedure Done;
 
+  function GetVendor : String;
+  procedure SetVendor(const S : String);
+
   procedure Add(const comment: String);
   procedure AddTag(const tag, value: String);
+  function TagsCount : Integer;
+  function GetTag(index : integer) : String;
   function Query(const tag: String; index: integer): String;
   function QueryCount(const tag: String): integer;
+
+  property Vendor : String read GetVendor write SetVendor;
   end;
+
+const COMMENT_ARTIST = 'ARTIST';
+      COMMENT_ALBUM  = 'ALBUM';
+      COMMENT_TITLE  = 'TITLE';
+      COMMENT_GENRE  = 'GENRE';
+      COMMENT_TRACK  = 'TRACKNUMBER';
 
 implementation
 

@@ -18,7 +18,7 @@ unit OGLSoundUtils;
 interface
 
 uses
-  Classes, SysUtils, Variants, OGLFastVariantHash,
+  Classes, SysUtils, Variants, OGLFastVariantHash, OGLFastList,
   OGLSoundUtilTypes;
 
 type
@@ -584,6 +584,114 @@ type
     function Version  : Cardinal; virtual;
   end;
 
+  { TVorbisTag }
+
+  TVorbisTag = class(TStringList)
+  private
+    FTag : String;
+  public
+    constructor Create(const aTag : String); overload;
+    constructor Create(aTag : TVorbisTag); overload;
+
+    procedure AssignTo(aTag : TPersistent); override;
+    procedure AddValues(aTag : TVorbisTag);
+
+    property Tag : String read FTag;
+  end;
+
+  { TVorbisTags }
+
+  TVorbisTags = class(specialize TFastBaseCollection<TVorbisTag>)
+  private
+    FVendor : String;
+  public
+    constructor Create(aTags : TVorbisTags); overload;
+    constructor CreateFromInterface(aTags : ISoundComment);
+
+    procedure Assign(aTags : TVorbisTags);
+    procedure AssignInterface(aTags : ISoundComment);
+
+    procedure AddComment(const comment: String);
+    procedure AddTag(const atag, avalue: String);
+    function Tag(const aTag : String) : TVorbisTag;
+    function CountAll : Integer;
+
+
+    property Vendor : String read FVendor write FVendor;
+  end;
+
+  { TSoundCommentCloneable }
+
+  TSoundCommentCloneable = class(TInterfacedObject, ISoundComment)
+  protected
+    procedure Init; virtual; abstract;
+    procedure Done; virtual; abstract;
+    function GetVendor : String; virtual; abstract;
+    procedure SetVendor(const S : String); virtual; abstract;
+  public
+    function Ref : Pointer; virtual; abstract;
+
+    constructor Create;
+    constructor CreateFromInterface(aSrc : ISoundComment);
+    procedure Clone(aSrc : ISoundComment); virtual;
+
+    procedure Add(const comment: String); virtual; abstract;
+    procedure AddTag(const tag, value: String); virtual; abstract;
+    function TagsCount : Integer; virtual; abstract;
+    function GetTag(index : integer) : String; virtual; abstract;
+    function Query(const tag: String; index: integer): String; virtual; abstract;
+    function QueryCount(const tag: String): integer; virtual; abstract;
+  end;
+
+  { TNativeVorbisCommentCloneable }
+
+  TNativeVorbisCommentCloneable = class(TSoundCommentCloneable)
+  private
+    fCachedTags : TStringList;
+  protected
+    procedure SetNativeVendor(v : PChar); virtual; abstract;
+    function GetNativeVendor : PChar; virtual; abstract;
+    function GetNativeComment(index : integer) : PChar; virtual; abstract;
+    function GetNativeCommentLength(index : integer) : Int32; virtual; abstract;
+    function GetNativeCommentCount : Int32; virtual; abstract;
+
+    function GetVendor : String; override;
+    procedure SetVendor(const S : String); override;
+  public
+    destructor Destroy; override;
+
+    procedure Add(const comment: String); override;
+    procedure AddTag(const tag, value: String); override;
+    function TagsCount : Integer; override;
+    function GetTag(index : integer) : String; override;
+  end;
+
+  { TVorbisComment }
+
+  TVorbisComment = class(TSoundCommentCloneable)
+  private
+    fRef : TVorbisTags;
+  protected
+    procedure Init; override;
+    procedure Done; override;
+    function GetVendor : String; override;
+    procedure SetVendor(const S : String); override;
+  public
+    function Ref : Pointer; override;
+
+    constructor Create;
+    destructor Destroy; override;
+
+    procedure Clone(aSrc : ISoundComment); override;
+
+    procedure Add(const comment: String); override;
+    procedure AddTag(const tag, value: String); override;
+    function TagsCount : Integer; override;
+    function GetTag(index : integer) : String; override;
+    function Query(const tag: String; index: integer): String; override;
+    function QueryCount(const tag: String): integer; override;
+  end;
+
   EOGLSound = class(Exception);
 
   { TOGLSound }
@@ -612,6 +720,11 @@ type
 
     class function NewErrorFrame : ISoundFrameSize;
 
+    class function NewVorbisComment : ISoundComment;
+    class function NewVorbisComment(aSrc : ISoundComment): ISoundComment;
+    class function SplitComment(const comment : String; out aTag, aValue : String) : Boolean;
+    class function GetCommentTag(const comment : String; out aTag : String) : Boolean;
+
     class function EncProps(const Vals : Array of Variant) : ISoundEncoderProps;
 
     // Encoder properties
@@ -631,6 +744,351 @@ const
   esRawSeekingNotImplemented : String = 'Raw seeking is not implemented by decoder';
   esPCMSeekingNotImplemented : String = 'PCM seeking is not implemented by decoder';
   esTimeSeekingNotImplemented : String = 'Time seeking is not implemented by decoder';
+
+{ TNativeVorbisCommentCloneable }
+
+function TNativeVorbisCommentCloneable.GetVendor : String;
+begin
+  Result := StrPas( GetNativeVendor );
+end;
+
+procedure TNativeVorbisCommentCloneable.SetVendor(const S : String);
+var  L : Integer;
+begin
+  L := Length(S);
+  SetNativeVendor(Getmem(L + 1));
+  if L > 0 then
+  begin
+    Move(S[1], GetNativeVendor^, L);
+  end;
+  GetNativeVendor()[L] := #0;
+end;
+
+destructor TNativeVorbisCommentCloneable.Destroy;
+begin
+  if assigned(fCachedTags) then
+    FreeAndNil(fCachedTags);
+  inherited Destroy;
+end;
+
+procedure TNativeVorbisCommentCloneable.Add(const comment : String);
+var
+  aTag : String;
+begin
+  if Assigned(fCachedTags) and
+     TOGLSound.GetCommentTag(comment, aTag) then
+    fCachedTags.Add(aTag);
+end;
+
+procedure TNativeVorbisCommentCloneable.AddTag(const tag, value : String);
+begin
+  if Assigned(fCachedTags) then
+    fCachedTags.Add(tag);
+end;
+
+function TNativeVorbisCommentCloneable.TagsCount : Integer;
+var
+  i : integer;
+  aTag : String;
+begin
+  if not Assigned(fCachedTags) then
+  begin
+    fCachedTags := TStringList.Create;
+    fCachedTags.Duplicates := dupIgnore;
+    for i := 0 to GetNativeCommentCount-1 do
+    begin
+      if TOGLSound.GetCommentTag(StrPas(GetNativeComment(i)), aTag) then
+        fCachedTags.Add(aTag);
+    end;
+  end;
+  Result := fCachedTags.Count;
+end;
+
+function TNativeVorbisCommentCloneable.GetTag(index : integer) : String;
+begin
+  if (index < 0) and (index >= TagsCount) then
+  begin
+    Result := '';
+    Exit;
+  end;
+  Result := fCachedTags[index];
+end;
+
+{ TSoundCommentCloneable }
+
+constructor TSoundCommentCloneable.Create;
+begin
+  Init;
+end;
+
+constructor TSoundCommentCloneable.CreateFromInterface(aSrc : ISoundComment);
+begin
+  Init;
+  Clone(aSrc);
+end;
+
+procedure TSoundCommentCloneable.Clone(aSrc : ISoundComment);
+var
+  i, j, c : integer;
+  tn : String;
+begin
+  if TagsCount > 0 then
+  begin
+    Done;
+    Init;
+  end;
+  for i := 0 to aSrc.TagsCount-1 do
+  begin
+    c := aSrc.QueryCount(tn);
+    for j := 0 to c-1 do
+    begin
+      AddTag(tn, aSrc.Query(tn, j));
+    end;
+  end;
+
+  SetVendor(aSrc.Vendor);
+end;
+
+{ TVorbisComment }
+
+function TVorbisComment.Ref : Pointer;
+begin
+  Result := Pointer(fRef);
+end;
+
+constructor TVorbisComment.Create;
+begin
+  Init;
+end;
+
+procedure TVorbisComment.Clone(aSrc : ISoundComment);
+begin
+  if assigned(fRef) then fRef.Free;
+  fRef := TVorbisTags.CreateFromInterface(aSrc);
+end;
+
+destructor TVorbisComment.Destroy;
+begin
+  Done;
+  inherited Destroy;
+end;
+
+procedure TVorbisComment.Init;
+begin
+  fRef := TVorbisTags.Create;
+end;
+
+procedure TVorbisComment.Done;
+begin
+  fRef.Free;
+end;
+
+function TVorbisComment.GetVendor : String;
+begin
+  Result := fRef.Vendor;
+end;
+
+procedure TVorbisComment.SetVendor(const S : String);
+begin
+  fRef.Vendor := S;
+end;
+
+procedure TVorbisComment.Add(const comment : String);
+begin
+  fRef.AddComment(comment);
+end;
+
+procedure TVorbisComment.AddTag(const tag, value : String);
+begin
+  fRef.AddTag(tag, value);
+end;
+
+function TVorbisComment.TagsCount : Integer;
+begin
+  Result := fRef.Count;
+end;
+
+function TVorbisComment.GetTag(index : integer) : String;
+begin
+  Result := fRef[index].Tag;
+end;
+
+function TVorbisComment.Query(const tag : String; index : integer) : String;
+var
+  t : TVorbisTag;
+begin
+  if index < 0 then
+    Result := ''
+  else
+  begin
+    t := fRef.Tag(tag);
+    if Assigned(t) then
+    begin
+      if t.Count > index then
+      begin
+        Result := t[index];
+      end else
+        Result := '';
+    end else
+    begin
+      Result := '';
+    end;
+  end;
+end;
+
+function TVorbisComment.QueryCount(const tag : String) : integer;
+var
+  t : TVorbisTag;
+begin
+  t := fRef.Tag(tag);
+  if Assigned(t) then
+  begin
+    Result := t.Count;
+  end else
+  begin
+    Result := 0;
+  end;
+end;
+
+{ TVorbisTags }
+
+constructor TVorbisTags.Create(aTags : TVorbisTags);
+begin
+  inherited Create;
+  Assign(aTags);
+end;
+
+constructor TVorbisTags.CreateFromInterface(aTags : ISoundComment);
+begin
+  inherited Create;
+  if aTags is TVorbisTags then
+  begin
+    Assign(aTags as TVorbisTags);
+  end else
+  begin
+    AssignInterface(aTags);
+  end;
+end;
+
+procedure TVorbisTags.Assign(aTags : TVorbisTags);
+var
+  i : integer;
+  t : TVorbisTag;
+begin
+  Clear;
+  for i := 0 to aTags.Count-1 do
+  begin
+    t := Tag(aTags[i].Tag);
+    if assigned(t) then
+      t.AddValues(aTags[i])
+    else
+    begin
+      t := TVorbisTag.Create(aTags[i]);
+      Add(t);
+    end;
+  end;
+
+  FVendor := aTags.Vendor;
+end;
+
+procedure TVorbisTags.AssignInterface(aTags : ISoundComment);
+var
+  i, j, c : integer;
+  tn : String;
+  t : TVorbisTag;
+begin
+  Clear;
+  for i := 0 to aTags.TagsCount-1 do
+  begin
+    tn := aTags.GetTag(i);
+    t := Tag(tn);
+    if not assigned(t) then
+    begin
+      t := TVorbisTag.Create(tn);
+      Add(t);
+    end;
+    c := aTags.QueryCount(tn);
+    for j := 0 to c-1 do
+    begin
+      t.Add(aTags.Query(tn, j));
+    end;
+  end;
+
+  FVendor := aTags.Vendor;
+end;
+
+procedure TVorbisTags.AddComment(const comment : String);
+var
+  aTag, aValue : String;
+begin
+  if TOGLSound.SplitComment(comment, aTag, aValue) then
+  begin
+    AddTag(aTag, aValue);
+  end;
+end;
+
+procedure TVorbisTags.AddTag(const atag, avalue : String);
+var
+  t : TVorbisTag;
+begin
+  t := Tag(atag);
+  if not Assigned(t) then
+  begin
+    t := TVorbisTag.Create(atag);
+    Add(t);
+  end;
+  t.Add(avalue);
+end;
+
+function TVorbisTags.Tag(const aTag : String) : TVorbisTag;
+var i : integer;
+begin
+  for i := 0 to Count-1 do
+  begin
+    if SameText(Self[i].Tag, aTag) then
+    begin
+      Result := Self[i];
+      Exit;
+    end;
+  end;
+  Result := nil;
+end;
+
+function TVorbisTags.CountAll : Integer;
+var i : integer;
+begin
+  Result := 0;
+  for i := 0 to Count-1 do
+  begin
+    Inc(Result, Self[i].Count);
+  end;
+end;
+
+{ TVorbisTag }
+
+constructor TVorbisTag.Create(const aTag : String);
+begin
+  inherited Create;
+  FTag := aTag;
+end;
+
+constructor TVorbisTag.Create(aTag : TVorbisTag);
+begin
+  inherited Create;
+  AssignTo(aTag);
+end;
+
+procedure TVorbisTag.AssignTo(aTag : TPersistent);
+begin
+  inherited AssignTo(aTag);
+  if aTag is TVorbisTag then
+    FTag := TVorbisTag(aTag).Tag;
+end;
+
+procedure TVorbisTag.AddValues(aTag : TVorbisTag);
+begin
+  AddStrings(aTag);
+end;
 
 { TSoundDataStreamReadOnlyForward }
 
@@ -886,12 +1344,12 @@ end;
 
 class function TSoundFile.DefaultEncoderDataLimits : TSoundDataLimits;
 begin
-  Result := [sdpReadOnly];
+  Result := [sdpWriteOnly];
 end;
 
 class function TSoundFile.DefaultDecoderDataLimits : TSoundDataLimits;
 begin
-  Result := [sdpWriteOnly];
+  Result := [sdpReadOnly];
 end;
 
 destructor TSoundFile.Destroy;
@@ -938,7 +1396,7 @@ begin
   else
     cStr := TFileStream.Create(aFileName, cMode);
 
-  Result := LoadFromStream(cStr, DefaultEncoderDataLimits);
+  Result := LoadFromStream(cStr, DefaultDecoderDataLimits);
 end;
 
 function TSoundFile.LoadFromStream(Str : TStream; aDataLimits : TSoundDataLimits
@@ -1012,7 +1470,7 @@ begin
     cMode := fmOpenReadWrite;
   Str := TFileStream.Create(aFileName, cMode or fmCreate);
   if Assigned(Str) then
-    Result := SaveToStream(Str, DefaultDecoderDataLimits, aProps, aComments) else
+    Result := SaveToStream(Str, DefaultEncoderDataLimits, aProps, aComments) else
     Result := false;
 end;
 
@@ -1441,6 +1899,45 @@ end;
 class function TOGLSound.NewErrorFrame : ISoundFrameSize;
 begin
   Result := TSoundFrameSize.CreateError as ISoundFrameSize;
+end;
+
+class function TOGLSound.NewVorbisComment : ISoundComment;
+begin
+  Result := TVorbisComment.Create as ISoundComment;
+end;
+
+class function TOGLSound.NewVorbisComment(aSrc : ISoundComment) : ISoundComment;
+begin
+  Result := TVorbisComment.CreateFromInterface(aSrc) as ISoundComment;
+end;
+
+class function TOGLSound.SplitComment(const comment : String; out aTag,
+  aValue : String) : Boolean;
+var
+  P : Integer;
+begin
+  P := Pos('=', comment);
+  if P > 0 then
+  begin
+    aTag := Copy(comment, 1, P - 1).Trim;
+    aValue := Copy(comment, P + 1, Length(comment)).Trim;
+    Result := True;
+  end else
+    Result := False;
+end;
+
+class function TOGLSound.GetCommentTag(const comment : String; out aTag : String
+  ) : Boolean;
+var
+  P : Integer;
+begin
+  P := Pos('=', comment);
+  if P > 0 then
+  begin
+    aTag := Copy(comment, 1, P - 1).Trim;
+    Result := True;
+  end else
+    Result := False;
 end;
 
 class function TOGLSound.EncProps(const Vals : array of Variant
