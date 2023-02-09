@@ -547,6 +547,7 @@ type
     destructor Destroy; override;
 
     function Stream : TStream; virtual;
+    function DetachStream : TStream; virtual;
     function DataLimits : TSoundDataLimits; virtual;
 
     function LoadFromFile(const aFileName : String; const aInMemory : Boolean
@@ -1274,7 +1275,7 @@ end;
 function TSoundDataStream.Size : Int64;
 begin
   try
-    result := fStream.Position;
+    result := fStream.Size;
   except
     result := -1;
   end;
@@ -1361,6 +1362,12 @@ end;
 function TSoundFile.Stream : TStream;
 begin
   Result := fStream;
+end;
+
+function TSoundFile.DetachStream : TStream;
+begin
+  Result := fStream;
+  fStream := nil;
 end;
 
 function TSoundFile.DataLimits : TSoundDataLimits;
