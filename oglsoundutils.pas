@@ -23,32 +23,39 @@ uses
 
 type
 
-  { ISoundEncoderProps }
+  ISoundProps = interface(IFastHashList)
+  ['{83B93349-1C21-4B1F-9F22-1CE6C393089F}']
 
-  ISoundEncoderProps = interface(IFastHashList)
-  ['{3AB017B6-7B3A-4C9F-900D-BD6CA2E8D728}']
-
-  function GetMode : TSoundEncoderMode;
   function GetChannels : Cardinal;
   function GetFrequency : Cardinal;
-  function GetBitrate : Cardinal;
   function GetSampleSize : TSoundSampleSize;
-  function GetQuality : Single;
 
-  procedure SetBitrate(AValue : Cardinal);
   procedure SetChannels(AValue : Cardinal);
   procedure SetFrequency(AValue : Cardinal);
-  procedure SetMode(AValue : TSoundEncoderMode);
-  procedure SetQuality(AValue : Single);
   procedure SetSampleSize(AValue : TSoundSampleSize);
 
   function HasProp(AValue : Cardinal) : Boolean;
 
-  property Mode : TSoundEncoderMode read GetMode write SetMode;
   property Channels : Cardinal read GetChannels write SetChannels;
   property Frequency : Cardinal read GetFrequency write SetFrequency;
-  property Bitrate : Cardinal read GetBitrate write SetBitrate;
   property SampleSize : TSoundSampleSize read GetSampleSize write SetSampleSize;
+  end;
+
+  { ISoundEncoderProps }
+
+  ISoundEncoderProps = interface(ISoundProps)
+  ['{3AB017B6-7B3A-4C9F-900D-BD6CA2E8D728}']
+
+  function GetMode : TSoundEncoderMode;
+  function GetBitrate : Cardinal;
+  function GetQuality : Single;
+
+  procedure SetBitrate(AValue : Cardinal);
+  procedure SetMode(AValue : TSoundEncoderMode);
+  procedure SetQuality(AValue : Single);
+
+  property Mode : TSoundEncoderMode read GetMode write SetMode;
+  property Bitrate : Cardinal read GetBitrate write SetBitrate;
   property Quality : Single read GetQuality write SetQuality;
   end;
 
@@ -73,7 +80,7 @@ type
                        aDurationMs : Single);
   procedure InitBytes(aFreq : Cardinal; aChannels : Cardinal;
                        aSampleSize : TSoundSampleSize;
-                       aBytes : Cardinal);
+                       aBytes : QWord);
   procedure InitSamples(aFreq : Cardinal; aChannels : Cardinal;
                        aSampleSize : TSoundSampleSize;
                        aSamples : Cardinal);
@@ -86,7 +93,7 @@ type
   function Duplicate : ISoundFrameSize;
   function EmptyDuplicate : ISoundFrameSize;
 
-  function AsBytes : Cardinal;
+  function AsBytes : QWord;
   function AsSamples : Cardinal;
   function AsDurationMs : Single;
   function AsDurationSec : Single;
@@ -106,9 +113,12 @@ type
   procedure Inc(aInc : ISoundFrameSize);
   procedure Dec(aDec : ISoundFrameSize);
   procedure IncSamples(aInc : Cardinal);
-  procedure IncBytes(aInc : Cardinal);
+  procedure IncBytes(aInc : QWord);
   procedure DecSamples(aDec : Cardinal);
-  procedure DecBytes(aDec : Cardinal);
+  procedure DecBytes(aDec : QWord);
+  procedure SetSamples(aValue : Cardinal);
+  procedure SetBytes(aValue : QWord);
+  procedure SetDurationMs(aValue : Single);
 
   property Frequency  : Cardinal read GetFrequency write SetFrequency;
   property Channels   : Cardinal read GetChannels write SetChannels;
@@ -243,25 +253,46 @@ type
   function TimeTotal : Double;
   end;
 
-  { TSoundEncoderProps }
+  { ISoundStreamEncoder }
 
-  TSoundEncoderProps = class(TFastHashList, ISoundEncoderProps)
+  ISoundStreamEncoder = interface(ISoundEncoder)
+  ['{AF42FD18-2FF2-415F-9D49-5229FAE64C85}']
+  procedure SetStream(aStream : TStream);
+  end;
+
+  { ISoundStreamDecoder }
+
+  ISoundStreamDecoder = interface(ISoundDecoder)
+  ['{E16C3CF3-55CF-40E0-9315-31FBBE8C24CE}']
+  procedure SetStream(aStream : TStream);
+  end;
+
+  { TSoundProps }
+
+  TSoundProps = class(TFastHashList, ISoundProps)
   protected
-    function GetMode : TSoundEncoderMode;
     function GetChannels : Cardinal;
     function GetFrequency : Cardinal;
-    function GetBitrate : Cardinal;
     function GetSampleSize : TSoundSampleSize;
-    function GetQuality : Single;
 
-    procedure SetBitrate(AValue : Cardinal);
     procedure SetChannels(AValue : Cardinal);
     procedure SetFrequency(AValue : Cardinal);
-    procedure SetMode(AValue : TSoundEncoderMode);
-    procedure SetQuality(AValue : Single);
     procedure SetSampleSize(AValue : TSoundSampleSize);
   public
     function HasProp(AValue : Cardinal) : Boolean;
+  end;
+
+  { TSoundEncoderProps }
+
+  TSoundEncoderProps = class(TSoundProps, ISoundEncoderProps)
+  protected
+    function GetMode : TSoundEncoderMode;
+    function GetBitrate : Cardinal;
+    function GetQuality : Single;
+
+    procedure SetBitrate(AValue : Cardinal);
+    procedure SetMode(AValue : TSoundEncoderMode);
+    procedure SetQuality(AValue : Single);
   end;
 
   { TSoundFrameSize }
@@ -271,7 +302,7 @@ type
     fFreq : Cardinal;
     fChannels : Byte;
     fSampleSize : TSoundSampleSize;
-    fBytes      : Cardinal;
+    fBytes      : QWord;
     fSamples    : Cardinal;
   protected
     function GetBitDepth : Byte;
@@ -291,7 +322,7 @@ type
                            aDurationMs : Single);
     procedure InitBytes(aFreq : Cardinal; aChannels : Cardinal;
                          aSampleSize : TSoundSampleSize;
-                         aBytes : Cardinal);
+                         aBytes : QWord);
     procedure InitSamples(aFreq : Cardinal; aChannels : Cardinal;
                          aSampleSize : TSoundSampleSize;
                          aSamples : Cardinal);
@@ -308,7 +339,7 @@ type
                                    aDurationMs : Single);
     constructor CreateFromBytes(aFreq : Cardinal; aChannels : Cardinal;
                          aSampleSize : TSoundSampleSize;
-                         aBytes : Cardinal);
+                         aBytes : QWord);
     constructor CreateFromSamples(aFreq : Cardinal; aChannels : Cardinal;
                          aSampleSize : TSoundSampleSize;
                          aSamples : Cardinal);
@@ -333,11 +364,14 @@ type
     procedure Inc(aInc : ISoundFrameSize);
     procedure Dec(aDec : ISoundFrameSize);
     procedure IncSamples(aInc : Cardinal);
-    procedure IncBytes(aInc : Cardinal);
+    procedure IncBytes(aInc : QWord);
     procedure DecSamples(aDec : Cardinal);
-    procedure DecBytes(aDec : Cardinal);
+    procedure DecBytes(aDec : QWord);
+    procedure SetSamples(aValue : Cardinal);
+    procedure SetBytes(aValue : QWord);
+    procedure SetDurationMs(aValue : Single);
 
-    function AsBytes : Cardinal;
+    function AsBytes : QWord;
     function AsSamples : Cardinal;
     function AsDurationMs : Single;
     function AsDurationSec : Single;
@@ -614,6 +648,7 @@ type
 
     procedure AddComment(const comment: String);
     procedure AddTag(const atag, avalue: String);
+    procedure SetTag(const atag, avalue: String);
     function Tag(const aTag : String) : TVorbisTag;
     function CountAll : Integer;
 
@@ -667,9 +702,16 @@ type
     function GetTag(index : integer) : String; override;
   end;
 
+  { IVorbisComment }
+
+  IVorbisComment = interface(ISoundComment)
+  ['{6997FDAA-01D5-4841-8509-5BA678A4156B}']
+  procedure SetTag(const tag, value: String);
+  end;
+
   { TVorbisComment }
 
-  TVorbisComment = class(TSoundCommentCloneable)
+  TVorbisComment = class(TSoundCommentCloneable, IVorbisComment)
   private
     fRef : TVorbisTags;
   protected
@@ -687,6 +729,7 @@ type
 
     procedure Add(const comment: String); override;
     procedure AddTag(const tag, value: String); override;
+    procedure SetTag(const tag, value: String);
     function TagsCount : Integer; override;
     function GetTag(index : integer) : String; override;
     function Query(const tag: String; index: integer): String; override;
@@ -721,20 +764,21 @@ type
 
     class function NewErrorFrame : ISoundFrameSize;
 
-    class function NewVorbisComment : ISoundComment;
-    class function NewVorbisComment(aSrc : ISoundComment): ISoundComment;
+    class function NewVorbisComment : IVorbisComment;
+    class function NewVorbisComment(aSrc : ISoundComment): IVorbisComment;
     class function SplitComment(const comment : String; out aTag, aValue : String) : Boolean;
     class function GetCommentTag(const comment : String; out aTag : String) : Boolean;
 
     class function EncProps(const Vals : Array of Variant) : ISoundEncoderProps;
 
+    // Sound properties
+    const PROP_CHANNELS      = $001;
+    const PROP_FREQUENCY     = $002;
+    const PROP_SAMPLE_SIZE   = $003;
     // Encoder properties
-    const PROP_MODE : Cardinal         = $001;
-    const PROP_CHANNELS : Cardinal     = $002;
-    const PROP_FREQUENCY : Cardinal    = $003;
-    const PROP_BITRATE : Cardinal      = $004;
-    const PROP_SAMPLE_SIZE : Cardinal  = $005;
-    const PROP_QUALITY : Cardinal      = $006;
+    const PROP_MODE          = $004;
+    const PROP_BITRATE       = $005;
+    const PROP_QUALITY       = $006;
   end;
 
 
@@ -745,6 +789,43 @@ const
   esRawSeekingNotImplemented : String = 'Raw seeking is not implemented by decoder';
   esPCMSeekingNotImplemented : String = 'PCM seeking is not implemented by decoder';
   esTimeSeekingNotImplemented : String = 'Time seeking is not implemented by decoder';
+
+{ TSoundProps }
+
+function TSoundProps.GetChannels : Cardinal;
+begin
+  Result := Get(TOGLSound.PROP_CHANNELS);
+end;
+
+function TSoundProps.GetFrequency : Cardinal;
+begin
+  Result := Get(TOGLSound.PROP_FREQUENCY);
+end;
+
+function TSoundProps.GetSampleSize : TSoundSampleSize;
+begin
+  Result := TSoundSampleSize(Get(TOGLSound.PROP_SAMPLE_SIZE));
+end;
+
+procedure TSoundProps.SetChannels(AValue : Cardinal);
+begin
+  Add(TOGLSound.PROP_CHANNELS, AValue);
+end;
+
+procedure TSoundProps.SetFrequency(AValue : Cardinal);
+begin
+  Add(TOGLSound.PROP_FREQUENCY, AValue);
+end;
+
+procedure TSoundProps.SetSampleSize(AValue : TSoundSampleSize);
+begin
+  Add(TOGLSound.PROP_SAMPLE_SIZE, Integer(AValue));
+end;
+
+function TSoundProps.HasProp(AValue : Cardinal) : Boolean;
+begin
+  Result := FindIndexOf(AValue) >= 0;
+end;
 
 { TNativeVorbisCommentCloneable }
 
@@ -784,7 +865,7 @@ end;
 procedure TNativeVorbisCommentCloneable.AddTag(const tag, value : String);
 begin
   if Assigned(fCachedTags) then
-    fCachedTags.Add(tag);
+    fCachedTags.Add(tag + '=' + value);
 end;
 
 function TNativeVorbisCommentCloneable.TagsCount : Integer;
@@ -840,6 +921,7 @@ begin
   end;
   for i := 0 to aSrc.TagsCount-1 do
   begin
+    tn := aSrc.GetTag(i);
     c := aSrc.QueryCount(tn);
     for j := 0 to c-1 do
     begin
@@ -902,6 +984,11 @@ end;
 procedure TVorbisComment.AddTag(const tag, value : String);
 begin
   fRef.AddTag(tag, value);
+end;
+
+procedure TVorbisComment.SetTag(const tag, value : String);
+begin
+  fRef.SetTag(tag, value);
 end;
 
 function TVorbisComment.TagsCount : Integer;
@@ -1041,6 +1128,22 @@ begin
   t.Add(avalue);
 end;
 
+procedure TVorbisTags.SetTag(const atag, avalue : String);
+var
+  t : TVorbisTag;
+begin
+  t := Tag(atag);
+  if Assigned(t) then
+  begin
+    t.Clear;
+  end else
+  begin
+    t := TVorbisTag.Create(atag);
+    Add(t);
+  end;
+  t.Add(avalue);
+end;
+
 function TVorbisTags.Tag(const aTag : String) : TVorbisTag;
 var i : integer;
 begin
@@ -1150,24 +1253,9 @@ begin
   Result := TSoundEncoderMode(Get(TOGLSound.PROP_MODE));
 end;
 
-function TSoundEncoderProps.GetChannels : Cardinal;
-begin
-  Result := Get(TOGLSound.PROP_CHANNELS);
-end;
-
-function TSoundEncoderProps.GetFrequency : Cardinal;
-begin
-  Result := Get(TOGLSound.PROP_FREQUENCY);
-end;
-
 function TSoundEncoderProps.GetBitrate : Cardinal;
 begin
   Result := Get(TOGLSound.PROP_BITRATE);
-end;
-
-function TSoundEncoderProps.GetSampleSize : TSoundSampleSize;
-begin
-  Result := TSoundSampleSize(Get(TOGLSound.PROP_SAMPLE_SIZE));
 end;
 
 function TSoundEncoderProps.GetQuality : Single;
@@ -1180,16 +1268,6 @@ begin
   Add(TOGLSound.PROP_BITRATE, AValue);
 end;
 
-procedure TSoundEncoderProps.SetChannels(AValue : Cardinal);
-begin
-  Add(TOGLSound.PROP_CHANNELS, AValue);
-end;
-
-procedure TSoundEncoderProps.SetFrequency(AValue : Cardinal);
-begin
-  Add(TOGLSound.PROP_FREQUENCY, AValue);
-end;
-
 procedure TSoundEncoderProps.SetMode(AValue : TSoundEncoderMode);
 begin
   Add(TOGLSound.PROP_MODE, Integer(AValue));
@@ -1198,16 +1276,6 @@ end;
 procedure TSoundEncoderProps.SetQuality(AValue : Single);
 begin
   Add(TOGLSound.PROP_QUALITY, AValue);
-end;
-
-procedure TSoundEncoderProps.SetSampleSize(AValue : TSoundSampleSize);
-begin
-  Add(TOGLSound.PROP_SAMPLE_SIZE, Integer(AValue));
-end;
-
-function TSoundEncoderProps.HasProp(AValue : Cardinal) : Boolean;
-begin
-  Result := FindIndexOf(AValue) >= 0;
 end;
 
 { TSoundDataStream }
@@ -1632,6 +1700,7 @@ end;
 
 function TSoundAbstractDecoder.RawTell : Int64;
 begin
+  Result := -1;
   if DataStream.Seekable then
     raise EOGLSound.Create(esRawSeekingNotImplemented) else
     raise EOGLSound.Create(esSeekingNotSupported);
@@ -1639,6 +1708,7 @@ end;
 
 function TSoundAbstractDecoder.SampleTell : Integer;
 begin
+  Result := -1;
   if DataStream.Seekable then
     raise EOGLSound.Create(esPCMSeekingNotImplemented) else
     raise EOGLSound.Create(esSeekingNotSupported);
@@ -1646,6 +1716,7 @@ end;
 
 function TSoundAbstractDecoder.TimeTell : Double;
 begin
+  Result := 0.0;
   if DataStream.Seekable then
     raise EOGLSound.Create(esTimeSeekingNotImplemented) else
     raise EOGLSound.Create(esSeekingNotSupported);
@@ -1754,11 +1825,15 @@ end;
 
 function TSoundAbstractEncDec.GetBitdepth : Cardinal;
 begin
+  // may cause heap overflow! override one of the GetBitdepth or GetSampleSize
+  // in the child class
   Result := TOGLSound.SampleSizeToBitdepth(GetSampleSize);
 end;
 
 function TSoundAbstractEncDec.GetSampleSize : TSoundSampleSize;
 begin
+  // may cause heap overflow! override one of the GetBitdepth or GetSampleSize
+  // in the child class
   Result := TOGLSound.BitdepthToSampleSize(GetBitdepth);
 end;
 
@@ -1908,14 +1983,14 @@ begin
   Result := TSoundFrameSize.CreateError as ISoundFrameSize;
 end;
 
-class function TOGLSound.NewVorbisComment : ISoundComment;
+class function TOGLSound.NewVorbisComment : IVorbisComment;
 begin
-  Result := TVorbisComment.Create as ISoundComment;
+  Result := TVorbisComment.Create as IVorbisComment;
 end;
 
-class function TOGLSound.NewVorbisComment(aSrc : ISoundComment) : ISoundComment;
+class function TOGLSound.NewVorbisComment(aSrc : ISoundComment) : IVorbisComment;
 begin
-  Result := TVorbisComment.CreateFromInterface(aSrc) as ISoundComment;
+  Result := TVorbisComment.CreateFromInterface(aSrc) as IVorbisComment;
 end;
 
 class function TOGLSound.SplitComment(const comment : String; out aTag,
@@ -2070,7 +2145,7 @@ begin
 end;
 
 procedure TSoundFrameSize.InitBytes(aFreq : Cardinal; aChannels : Cardinal;
-  aSampleSize : TSoundSampleSize; aBytes : Cardinal);
+  aSampleSize : TSoundSampleSize; aBytes : QWord);
 begin
   fFreq := aFreq;
   fChannels := aChannels;
@@ -2138,7 +2213,7 @@ begin
 end;
 
 constructor TSoundFrameSize.CreateFromBytes(aFreq : Cardinal;
-  aChannels : Cardinal; aSampleSize : TSoundSampleSize; aBytes : Cardinal);
+  aChannels : Cardinal; aSampleSize : TSoundSampleSize; aBytes : QWord);
 begin
   InitBytes(aFreq, aChannels, aSampleSize, aBytes);
 end;
@@ -2284,7 +2359,7 @@ begin
   RecalcBytes;
 end;
 
-procedure TSoundFrameSize.IncBytes(aInc : Cardinal);
+procedure TSoundFrameSize.IncBytes(aInc : QWord);
 begin
   System.Inc(fBytes, aInc);
   RecalcSamples;
@@ -2296,13 +2371,31 @@ begin
   RecalcBytes;
 end;
 
-procedure TSoundFrameSize.DecBytes(aDec : Cardinal);
+procedure TSoundFrameSize.DecBytes(aDec : QWord);
 begin
   System.Dec(fBytes, aDec);
   RecalcSamples;
 end;
 
-function TSoundFrameSize.AsBytes : Cardinal;
+procedure TSoundFrameSize.SetSamples(aValue : Cardinal);
+begin
+  fSamples := aValue;
+  RecalcBytes;
+end;
+
+procedure TSoundFrameSize.SetBytes(aValue : QWord);
+begin
+  fBytes := aValue;
+  RecalcSamples;
+end;
+
+procedure TSoundFrameSize.SetDurationMs(aValue : Single);
+begin
+  fSamples := Round(Single(fFreq) * aValue / 1000.0 + 0.5);
+  RecalcBytes;
+end;
+
+function TSoundFrameSize.AsBytes : QWord;
 begin
   Result := fBytes;
 end;

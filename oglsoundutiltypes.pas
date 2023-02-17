@@ -60,14 +60,18 @@ type
   public
   class function Find(const aTagId : String) : Integer;
   class function Get(TagNum : Integer) : PStandardComment;
+  class function TagID(TagNum : Integer) : String;
   class function GetByID(const aTagId : String) : PStandardComment;
   class function GetCount : Integer;
 
-  const COMMENT_ALBUM  = 2;
-  const COMMENT_ARTIST = 3;
-  const COMMENT_GENRE  = 17;
-  const COMMENT_TITLE  = 29;
-  const COMMENT_TRACK  = 30;
+  const COMMENT_ALBUM   = 2;
+  const COMMENT_ARTIST  = 3;
+  const COMMENT_COMMENT = 4;
+  const COMMENT_DATE    = 10;
+  const COMMENT_ENCODER = 15;
+  const COMMENT_GENRE   = 17;
+  const COMMENT_TITLE   = 29;
+  const COMMENT_TRACK   = 30;
   end;
 
 implementation
@@ -167,6 +171,11 @@ begin
     Result := @cStandardSoundComments[TagNum];
   end else
     Result := @cStandardSoundComments[0];
+end;
+
+class function TOGLSoundComments.TagID(TagNum : Integer) : String;
+begin
+  Result := Get(TagNum)^.TagID;
 end;
 
 class function TOGLSoundComments.GetByID(const aTagId : String
