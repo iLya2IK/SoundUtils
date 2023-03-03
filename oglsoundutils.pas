@@ -19,10 +19,9 @@ interface
 
 uses
   Classes, SysUtils, Variants, OGLFastVariantHash, OGLFastList,
-  OGLSoundUtilTypes;
+  OGLSoundUtilTypes, OGLSoundDataConverting;
 
 type
-
   ISoundProps = interface(IFastHashList)
   ['{83B93349-1C21-4B1F-9F22-1CE6C393089F}']
 
@@ -267,6 +266,41 @@ type
   procedure SetStream(aStream : TStream);
   end;
 
+  { ISoundResampler }
+
+  ISoundResampler = interface
+  ['{2544D592-C670-42AD-8690-533F3CE65CA9}']
+
+  function Init(aOutBufferSize : ISoundFrameSize;
+                        aInRate : Cardinal; aQuality : Integer;
+                        aProps : ISoundProps) : Boolean;
+  function Init(aProps : ISoundProps) : Boolean;
+  procedure Done;
+
+  function Write(aBuffer : Pointer;
+                              aFrame : ISoundFrameSize) : ISoundFrameSize;
+  function WriteInterleave(aBuffer : Pointer;
+                              aFrame : ISoundFrameSize) : ISoundFrameSize;
+  function Flush : ISoundFrameSize;
+
+  function  ReInit(aInRate : Cardinal; aQuality : Integer;
+                              aProps : ISoundProps) : Boolean;
+  function  ReInit(aOutBufferSize : ISoundFrameSize;
+                      aInRate : Cardinal; aQuality : Integer;
+                              aProps : ISoundProps) : Boolean;
+  function  ReInit(aProps : ISoundProps) : Boolean;
+  procedure SetInputRate(aRate : Cardinal);
+  procedure SetQuality(aValue : Integer);
+  procedure RequestBuffer(aSamples : Integer);
+
+  function Ready : Boolean;
+  function InputRate : Cardinal;
+  function Quality : Integer;
+  function OutBuffer : Pointer;
+  function OutFrameSize : ISoundFrameSize;
+  function OutBufferSize : Int64;
+  end;
+
   { TSoundProps }
 
   TSoundProps = class(TFastHashList, ISoundProps)
@@ -482,6 +516,79 @@ type
     function TimeTotal : Double; virtual;
 
     function InternalType : TSoundEncDecType; override;
+  end;
+
+  { TSoundAbstractResampler }
+
+  TSoundAbstractResampler = class(TInterfacedObject, ISoundResampler)
+  private
+    FOutBufferMaxSize : ISoundFrameSize;
+  protected
+    function Init(aOutBufferSize : ISoundFrameSize;
+                          aInRate : Cardinal; aQuality : Integer;
+                          aProps : ISoundProps) : Boolean; virtual;
+    function Init(aProps : ISoundProps) : Boolean; virtual;
+    procedure Done; virtual; abstract;
+  public
+    constructor Create(aOutBufferSize : ISoundFrameSize;
+                        aInRate : Cardinal; aQuality : Integer;
+                        aProps : ISoundProps); virtual;
+    constructor Create(aProps : ISoundProps); virtual;
+    destructor Destroy; override;
+
+    function Write(aBuffer : Pointer;
+                                aFrame : ISoundFrameSize) : ISoundFrameSize;virtual;
+    function WriteInterleave(aBuffer : Pointer;
+                                aFrame : ISoundFrameSize) : ISoundFrameSize;virtual;
+
+    function  ReInit(aInRate : Cardinal; aQuality : Integer;
+                                aProps : ISoundProps) : Boolean; virtual; overload;
+    function  ReInit(aOutBufferSize : ISoundFrameSize;
+                        aInRate : Cardinal; aQuality : Integer;
+                                aProps : ISoundProps) : Boolean; virtual; overload;
+    function  ReInit(aProps : ISoundProps) : Boolean; virtual; overload;
+    function  Flush : ISoundFrameSize; virtual; abstract;
+    procedure RequestBuffer(aSamples : Integer);virtual; abstract;
+    procedure SetInputRate(aRate : Cardinal);virtual; abstract;
+    procedure SetQuality(aValue : Integer);virtual; abstract;
+
+    function Ready : Boolean; virtual; abstract;
+    function InputRate : Cardinal; virtual; abstract;
+    function Quality : Integer; virtual; abstract;
+    function OutBuffer : Pointer; virtual; abstract;
+    function OutFrameSize : ISoundFrameSize; virtual;
+    function OutBufferSize : Int64; virtual; abstract;
+  end;
+
+  { TSoundAbstractBufferedResampler }
+
+  TSoundAbstractBufferedResampler = class(TSoundAbstractResampler)
+  private
+    FCurBufferSize : Int64;
+    FBuffer        : Pointer;
+    FConvBuffer    : Pointer;
+  protected
+    procedure InitConvBuffer; virtual;
+    function Init(aOutBufferSize : ISoundFrameSize;
+                          aInRate : Cardinal; aQuality : Integer;
+                          aProps : ISoundProps) : Boolean; override;
+    procedure Done; override;
+    procedure SetBufferSize(newBufferSize : Int64);
+    function  GetBufferSize : Int64;
+    function DoWrite(aInBuffer, aOutBuffer  : Pointer;
+                                aSamples : Cardinal) : Cardinal; virtual; abstract;
+    function DoWriteInterleave(aInBuffer, aOutBuffer  : Pointer;
+                                aSamples : Cardinal) : Cardinal; virtual; abstract;
+  public
+    function Write(aBuffer : Pointer;
+                                aFrame : ISoundFrameSize) : ISoundFrameSize; override;
+    function WriteInterleave(aBuffer : Pointer;
+                                aFrame : ISoundFrameSize) : ISoundFrameSize; override;
+
+    procedure RequestBuffer(aSamples : Integer); override;
+
+    function OutBuffer : Pointer;override;
+    function OutBufferSize : Int64;override;
   end;
 
   { TSoundDataStream }
@@ -741,6 +848,9 @@ type
   { TOGLSound }
 
   TOGLSound = class
+  private
+    class procedure FillProps(aProps : ISoundProps;
+                                           const Vals : array of Variant);
   public
     class function FrameFromDuration(aFreq : Cardinal; aChannels : Cardinal;
                          aSampleSize : TSoundSampleSize;
@@ -770,15 +880,22 @@ type
     class function GetCommentTag(const comment : String; out aTag : String) : Boolean;
 
     class function EncProps(const Vals : Array of Variant) : ISoundEncoderProps;
+    class function Props(const Vals : Array of Variant) : ISoundProps;
 
     // Sound properties
-    const PROP_CHANNELS      = $001;
-    const PROP_FREQUENCY     = $002;
-    const PROP_SAMPLE_SIZE   = $003;
+    const PROP_CHANNELS                 = $01;
+    const PROP_FREQUENCY                = $02;
+    const PROP_SAMPLE_SIZE              = $03;
     // Encoder properties
-    const PROP_MODE          = $004;
-    const PROP_BITRATE       = $005;
-    const PROP_QUALITY       = $006;
+    const PROP_MODE                     = $04;
+    const PROP_BITRATE                  = $05;
+    const PROP_QUALITY                  = $06;
+    // Sampler properties
+    const PROP_SAMPLER_OUT_SIZE_BYTES   = $07;
+    const PROP_SAMPLER_OUT_SIZE_SAMPLES = $08;
+    const PROP_SAMPLER_OUT_SIZE_MS      = $09;
+    const PROP_SAMPLER_INPUT_RATE       = $0A;
+    const PROP_SAMPLER_QUALITY          = $0B;
   end;
 
 
@@ -789,6 +906,219 @@ const
   esRawSeekingNotImplemented : String = 'Raw seeking is not implemented by decoder';
   esPCMSeekingNotImplemented : String = 'PCM seeking is not implemented by decoder';
   esTimeSeekingNotImplemented : String = 'Time seeking is not implemented by decoder';
+
+{ TSoundAbstractBufferedResampler }
+
+procedure TSoundAbstractBufferedResampler.InitConvBuffer;
+var
+  sz : ISoundFrameSize;
+begin
+  if Assigned(FConvBuffer) then
+    FreeMemAndNil(FConvBuffer);
+  sz := TOGLSound.FrameFromSamples(InputRate,
+                                   FOutBufferMaxSize.Channels,
+                                   FOutBufferMaxSize.SampleSize,
+                                   FOutBufferMaxSize.AsSamples);
+  FConvBuffer := GetMem(sz.AsBytes)
+end;
+
+function TSoundAbstractBufferedResampler.Init(aOutBufferSize : ISoundFrameSize;
+  aInRate : Cardinal; aQuality : Integer; aProps : ISoundProps) : Boolean;
+begin
+  Result := inherited Init(aOutBufferSize, aInRate, aQuality, aProps);
+  if Result then
+  begin
+    FConvBuffer := nil;
+    FBuffer := GetMem(FOutBufferMaxSize.AsBytes);
+    Result := Assigned(FBuffer);
+  end;
+end;
+
+procedure TSoundAbstractBufferedResampler.Done;
+begin
+  if Assigned(FConvBuffer) then
+    FreeMemAndNil(FConvBuffer);
+  if Assigned(FBuffer) then
+    Freemem(FBuffer);
+end;
+
+procedure TSoundAbstractBufferedResampler.SetBufferSize(newBufferSize : Int64);
+begin
+  FCurBufferSize := newBufferSize;
+end;
+
+function TSoundAbstractBufferedResampler.GetBufferSize : Int64;
+begin
+  Result := FCurBufferSize;
+end;
+
+function TSoundAbstractBufferedResampler.Write(aBuffer : Pointer;
+  aFrame : ISoundFrameSize) : ISoundFrameSize;
+begin
+  Result := inherited Write(aBuffer, aFrame);
+end;
+
+function TSoundAbstractBufferedResampler.WriteInterleave(aBuffer : Pointer;
+  aFrame : ISoundFrameSize) : ISoundFrameSize;
+var
+  samples, outsamples : Cardinal;
+  wbuf : Pointer;
+begin
+  if aFrame.IsValid then
+  begin
+    samples := aFrame.AsSamples;
+    Result := FOutBufferMaxSize.Duplicate;
+
+    if Result.SampleSize <> aFrame.SampleSize then
+    begin
+      if not Assigned(FConvBuffer) then
+        InitConvBuffer;
+      InterleaveSamples(aBuffer, FConvBuffer,
+                                 aFrame.SampleSize,
+                                 Result.SampleSize,
+                                 true,
+                                 aFrame.Channels,
+                                 samples);
+      wbuf := FConvBuffer;
+    end else
+      wbuf := aBuffer;
+
+    outsamples := DoWriteInterleave(wbuf, FBuffer, samples);
+    Result.SetSamples(outsamples);
+
+    FCurBufferSize := Result.AsBytes;
+  end else
+    Result := TOGLSound.NewErrorFrame;
+end;
+
+procedure TSoundAbstractBufferedResampler.RequestBuffer(aSamples : Integer);
+begin
+  if FOutBufferMaxSize.AsSamples < aSamples then
+  begin
+    FOutBufferMaxSize.SetSamples(aSamples);
+    if Assigned(FBuffer) then
+      FreeMemAndNil(FBuffer);
+    FBuffer := GetMem(FOutBufferMaxSize.AsBytes);
+    if Assigned(FConvBuffer) then
+      InitConvBuffer;
+  end;
+end;
+
+function TSoundAbstractBufferedResampler.OutBuffer : Pointer;
+begin
+  Result := FBuffer;
+end;
+
+function TSoundAbstractBufferedResampler.OutBufferSize : Int64;
+begin
+  Result := FCurBufferSize;
+end;
+
+{ TSoundAbstractResampler }
+
+function TSoundAbstractResampler.Init(aOutBufferSize : ISoundFrameSize;
+  aInRate : Cardinal; aQuality : Integer; aProps : ISoundProps) : Boolean;
+begin
+  FOutBufferMaxSize := aOutBufferSize.Duplicate;
+  Result := FOutBufferMaxSize.IsValid;
+end;
+
+function TSoundAbstractResampler.Init(aProps : ISoundProps) : Boolean;
+var
+  aFreq, aChannels : Cardinal;
+  aSampleSize : TSoundSampleSize;
+  aFrame : ISoundFrameSize;
+  aQuality : Integer;
+  aInRate  : Cardinal;
+begin
+  if Assigned(aProps) then
+  begin
+    if aProps.HasProp(TOGLSound.PROP_FREQUENCY) and
+       aProps.HasProp(TOGLSound.PROP_CHANNELS) and
+       aProps.HasProp(TOGLSound.PROP_SAMPLE_SIZE) and
+       aProps.HasProp(TOGLSound.PROP_SAMPLER_INPUT_RATE) then
+    begin
+      aFreq       := aProps.Get(TOGLSound.PROP_FREQUENCY);
+      aChannels   := aProps.Get(TOGLSound.PROP_CHANNELS);
+      aSampleSize := aProps.Get(TOGLSound.PROP_SAMPLE_SIZE);
+
+      aFrame := TOGLSound.NewEmptyFrame(aFreq, aChannels, aSampleSize);
+
+      if aProps.HasProp(TOGLSound.PROP_SAMPLER_OUT_SIZE_BYTES) then
+      begin
+        aFrame.SetBytes(aProps.Get(TOGLSound.PROP_SAMPLER_OUT_SIZE_BYTES));
+      end else
+      if aProps.HasProp(TOGLSound.PROP_SAMPLER_OUT_SIZE_SAMPLES) then
+      begin
+        aFrame.SetSamples(aProps.Get(TOGLSound.PROP_SAMPLER_OUT_SIZE_SAMPLES));
+      end else
+      if aProps.HasProp(TOGLSound.PROP_SAMPLER_OUT_SIZE_MS) then
+      begin
+        aFrame.SetDurationMs(aProps.Get(TOGLSound.PROP_SAMPLER_OUT_SIZE_MS));
+      end else
+        Exit(false);
+
+      aInRate  := aProps.Get(TOGLSound.PROP_SAMPLER_INPUT_RATE);
+      aQuality := aProps.GetDefault(TOGLSound.PROP_SAMPLER_QUALITY, 5);
+      Result := Init(aFrame, aInRate, aQuality, aProps);
+    end else
+      Result := false;
+  end else
+      Result := false;
+end;
+
+constructor TSoundAbstractResampler.Create(aOutBufferSize : ISoundFrameSize;
+  aInRate : Cardinal; aQuality : Integer; aProps : ISoundProps);
+begin
+  Init(aOutBufferSize, aInRate, aQuality, aProps);
+end;
+
+constructor TSoundAbstractResampler.Create(aProps : ISoundProps);
+begin
+  Init(aProps);
+end;
+
+destructor TSoundAbstractResampler.Destroy;
+begin
+  Done;
+  inherited Destroy;
+end;
+
+function TSoundAbstractResampler.Write(aBuffer : Pointer;
+  aFrame : ISoundFrameSize) : ISoundFrameSize;
+begin
+  Result := TOGLSound.NewErrorFrame;
+end;
+
+function TSoundAbstractResampler.WriteInterleave(aBuffer : Pointer;
+  aFrame : ISoundFrameSize) : ISoundFrameSize;
+begin
+  Result := TOGLSound.NewErrorFrame;
+end;
+
+function TSoundAbstractResampler.ReInit(aProps : ISoundProps) : Boolean;
+begin
+  Done;
+  Result := Init(aProps);
+end;
+
+function TSoundAbstractResampler.ReInit(aInRate : Cardinal; aQuality : Integer;
+  aProps : ISoundProps) : Boolean;
+begin
+  Result := ReInit(FOutBufferMaxSize, aInRate, aQuality, aProps);
+end;
+
+function TSoundAbstractResampler.ReInit(aOutBufferSize : ISoundFrameSize;
+  aInRate : Cardinal; aQuality : Integer; aProps : ISoundProps) : Boolean;
+begin
+  Done;
+  Result := Init(aOutBufferSize, aInRate, aQuality, aProps);
+end;
+
+function TSoundAbstractResampler.OutFrameSize : ISoundFrameSize;
+begin
+  Result := FOutBufferMaxSize;
+end;
 
 { TSoundProps }
 
@@ -2022,19 +2352,34 @@ begin
     Result := False;
 end;
 
-class function TOGLSound.EncProps(const Vals : array of Variant
-  ) : ISoundEncoderProps;
+class procedure TOGLSound.FillProps(aProps : ISoundProps;
+                                       const Vals : array of Variant);
 var i : integer;
 begin
-  if Length(Vals) mod 2 > 0 then Exit(nil);
-  Result := TSoundEncoderProps.Create;
   i := Low(Vals);
   while i < High(Vals) do
   begin
     if not VarIsOrdinal(Vals[i]) then exit;
-    Result.Add(Vals[i], Vals[i+1]);
+    aProps.Add(Vals[i], Vals[i+1]);
     Inc(i, 2);
   end;
+end;
+
+class function TOGLSound.EncProps(const Vals : array of Variant
+  ) : ISoundEncoderProps;
+begin
+  if Length(Vals) mod 2 > 0 then Exit(nil);
+  Result := TSoundEncoderProps.Create;
+
+  FillProps(Result, Vals);
+end;
+
+class function TOGLSound.Props(const Vals : array of Variant) : ISoundProps;
+begin
+  if Length(Vals) mod 2 > 0 then Exit(nil);
+  Result := TSoundProps.Create;
+
+  FillProps(Result, Vals);
 end;
 
 { TSoundFrameSize }
