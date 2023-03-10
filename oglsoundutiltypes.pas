@@ -26,6 +26,14 @@ type
   TSoundEncoderMode = (oemCBR, oemVBR);
   TSoundDataLimit  = (sdpForceNotSeekable, sdpReadOnly, sdpWriteOnly);
   TSoundDataLimits = set of TSoundDataLimit;
+  type
+  TSoundComplexData = record
+     case byte of
+     0 : (v : Array [0..1] of Single;);
+     1 : (r : Single; i : Single;);
+  end;
+  PSoundComplexData = ^TSoundComplexData;
+  PPSoundComplexData = ^PSoundComplexData;
 
   { ISoundComment }
 
@@ -64,6 +72,7 @@ type
   class function GetByID(const aTagId : String) : PStandardComment;
   class function GetCount : Integer;
 
+  const COMMENT_ACTOR   = 1;
   const COMMENT_ALBUM   = 2;
   const COMMENT_ARTIST  = 3;
   const COMMENT_COMMENT = 4;

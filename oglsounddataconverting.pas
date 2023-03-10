@@ -77,6 +77,53 @@ procedure InterleaveFloatToI8(const src : PPointer; dst : PInt8; channels, sampl
 procedure InterleaveFloatToI16(const src : PPointer; dst : PInt16; channels, samples : Integer);
 procedure InterleaveFloatToI32(const src : PPointer; dst : PInt32; channels, samples : Integer);
 
+{ file: fft.c
+  function: Fast discrete Fourier and cosine transforms and inverses
+  author: Monty <xiphmont@mit.edu>
+  modifications by: Monty
+  last modification date: Jul 1 1996
+}
+{$REGION 'fft declarations'}
+{
+* PARAMETERS:
+* * int n;          The length of the sequence to be transformed.
+* * float *x;       A real array of length n which contains the sequenceto be transformed
+* * float *wsave;   A work array which must be dimensioned at least 2*n+15.
+* *                 the same work array can be used for both rfftf and rfftb
+* *                 as long as n remains unchanged. different wsave arrays
+* *                 are required for different values of n. the contents of
+* *                 wsave must not be changed between calls of rfftf or rfftb.
+* * int *ifac;      Array containing factors of the problem dimensions.
+* *                 (initialization requirements are similar to wsave)
+* *                 It needs to be 15 elements.
+}
+
+{ Initialize work arrays for FFT }
+procedure __ogg_fdrffti(n : integer; wsave : pSingle; ifac : pInteger);
+{ Apply forward FFT}
+procedure __ogg_fdrfftf(n : integer; r, wsave : pSingle; ifac : pInteger);
+{ Initialize work arrays for cosine transforms }
+procedure __ogg_fdcosqi(n : integer; wsave : pSingle; ifac : pInteger);
+{ Apply forward cosine transform}
+procedure __ogg_fdcosqf(n : integer; x, wsave : pSingle; ifac : pInteger);
+procedure __ogg_fdrfftb(n : integer; r, wsave : pSingle; ifac : pInteger);
+procedure __ogg_fdcosqb(n : integer; x, wsave : pSingle; ifac : pInteger);
+
+procedure drfti1(n : integer; wa : pSingle; ifac : pInteger);
+procedure dradf2(ido, l1 : Integer; cc, ch, wa1 : pSingle);
+procedure dradf4(ido, l1 : Integer; cc, ch, wa1, wa2, wa3 : pSingle);
+procedure dradfg(ido, ip, l1, idl1 : Integer; cc, c1, c2, ch, ch2, wa : pSingle);
+procedure drftf1(n : integer; c, ch, wa : pSingle; ifac : pInteger);
+procedure dcsqf1(n : integer; x, w, xh : pSingle; ifac : pInteger);
+procedure dradb2(ido, l1 : integer; cc, ch, wa1 : pSingle);
+procedure dradb3(ido, l1 : integer; cc, ch, wa1, wa2 : pSingle);
+procedure dradb4(ido, l1 : integer; cc, ch, wa1, wa2, wa3 : pSingle);
+procedure dradbg(ido, ip, l1, idl1 : integer; cc, c1, c2, ch, ch2, wa : pSingle);
+procedure drftb1(n : integer; c, ch, wa : pSingle; ifac : pInteger);
+procedure dcsqb1(n : integer; x, w, xh : pSingle; ifac : pInteger);
+{$ENDREGION}
+
+
 {  Copyright (C) 2007-2008 Jean-Marc Valin
    Copyright (C) 2008      Thorvald Natvig
    File: resample.c
@@ -238,6 +285,1613 @@ function speex_resampler_strerror(err : integer) : String;
 implementation
 
 uses Math;
+
+function FLOAT2INT8(x : Single) : Int8; inline;
+begin
+  if x < -127.5 then
+     Result := -128 else
+  begin
+    if x > 126.5 then
+      Result := 127 else
+    begin
+      if x < 0 then
+         Result := int8(trunc(x - 0.5)) else
+         Result := int8(trunc(0.5 + x));
+    end;
+  end;
+end;
+
+function FLOAT2INT16(x : Single) : Int16; inline;
+begin
+  if x < -32767.5 then
+     Result := -32768 else
+  begin
+    if x > 32766.5 then
+      Result := 32767 else
+    begin
+      if x < 0 then
+         Result := int16(trunc(x - 0.5)) else
+         Result := int16(trunc(0.5 + x));
+    end;
+  end;
+end;
+
+function FLOAT2INT32(x : Single) : Int32; inline;
+begin
+  if x < -2147483647.5 then
+     Result := -2147483648 else
+  begin
+    if x > 2147483646.5 then
+      Result := 2147483647 else
+    begin
+      if x < 0 then
+         Result := int32(trunc(x - 0.5)) else
+         Result := int32(trunc(0.5 + x));
+    end;
+  end;
+end;
+
+{ this part of the code is a direct translation into freepascal of the source
+  code written in C
+  https://raw.githubusercontent.com/biotrump/fftpack/master/fft.c
+     author: Monty <xiphmont@mit.edu>
+     modifications by: Monty
+     last modification date: Jul 1 1996
+     File: fft.c
+     Fast discrete Fourier and cosine transforms and inversese }
+{$REGION 'fft.c translation'}
+
+procedure drfti1(n : integer; wa : pSingle; ifac : pInteger);
+const  ntryh : array [0..3] of integer = (4,2,3,5);
+const  tpi : Single = 6.28318530717958647692528676655900577;
+label  L101, L104, L107;
+var
+  arg,argh,argld,fi : Single;
+  ntry ,i,j : integer;
+  k1, l1, l2, ib,
+  ld, ii, ip, isv, nq, nr,
+  ido, ipm, nfm1,
+  nl, nf : integer;
+begin
+  ntry:=0;
+  j:=-1;
+  nl:=n;
+  nf:=0;
+
+ L101:
+  Inc(j);
+  if (j < 4) then
+    ntry:=ntryh[j]
+  else
+    ntry+=2;
+
+ L104:
+  nq:=nl div ntry;
+  nr:=nl-ntry*nq;
+  if (nr<>0) then goto L101;
+
+  inc(nf);
+  ifac[nf+1]:=ntry;
+  nl:=nq;
+  if(ntry<>2) then goto L107;
+  if(nf=1) then goto L107;
+
+  for i:=1 to nf-1 do
+  begin
+    ib:=nf-i+1;
+    ifac[ib+1]:=ifac[ib];
+  end;
+  ifac[2] := 2;
+
+ L107:
+  if (nl<>1) then goto L104;
+  ifac[0]:=n;
+  ifac[1]:=nf;
+  argh:=tpi/n;
+  isv:=0;
+  nfm1:=nf-1;
+  l1:=1;
+
+  if (nfm1=0) then Exit;
+
+  for k1 :=0 to nfm1-1 do
+  begin
+    ip:=ifac[k1+2];
+    ld:=0;
+    l2:=l1*ip;
+    ido:=n div l2;
+    ipm:=ip-1;
+
+    for j:=0 to ipm-1 do
+    begin
+      ld+=l1;
+      i:=isv;
+      argld:=ld*argh;
+      fi:=0.0;
+      ii := 2;
+      while ii < ido do
+      begin
+	fi+=1.0;
+	arg:=fi*argld;
+	wa[i]:=cos(arg);
+        inc(i);
+	wa[i]:=sin(arg);
+        inc(i);
+        Inc(ii, 2);
+      end;
+      isv+=ido;
+    end;
+    l1:=l2;
+  end;
+end;
+
+procedure __ogg_fdrffti(n : integer; wsave : pSingle; ifac : pInteger);
+begin
+  if (n = 1) then Exit;
+  drfti1(n, @(wsave[n]), ifac);
+end;
+
+procedure __ogg_fdcosqi(n : integer; wsave : pSingle; ifac : pInteger);
+const pih : Single = 1.57079632679489661923132169163975;
+var
+  k : integer;
+  fk, dt : Single;
+begin
+  dt := pih / n;
+  fk := 0.0;
+  for k:=0 to n-1 do
+  begin
+    fk += 1.0;
+    wsave[k] := cos(fk*dt);
+  end;
+
+  __ogg_fdrffti(n, @(wsave[n]),ifac);
+end;
+
+procedure dradf2(ido, l1 : Integer; cc, ch, wa1 : pSingle);
+label L105;
+var i, k : integer;
+  ti2, tr2 : Single;
+  t0,t1,t2,t3,t4,t5,t6 : integer;
+begin
+  t1 := 0;
+  t2 := l1*ido;
+  t0 := t2;
+  t3 := ido shl 1;
+  for k:=0 to l1-1 do
+  begin
+    ch[t1 shl 1]:=cc[t1]+cc[t2];
+    ch[(t1 shl 1)+t3-1]:=cc[t1]-cc[t2];
+    t1 += ido;
+    t2 += ido;
+  end;
+
+  if (ido<2) then Exit;
+  if (ido=2) then goto L105;
+
+  t1 := 0;
+  t2 := t0;
+  for k:=0 to l1-1 do
+  begin
+    t3:=t2;
+    t4:=(t1 shl 1)+(ido shl 1);
+    t5:=t1;
+    t6:=t1+t1;
+    i := 2;
+    while i<ido do
+    begin
+      t3+=2;
+      t4-=2;
+      t5+=2;
+      t6+=2;
+      tr2:=wa1[i-2]*cc[t3-1]+wa1[i-1]*cc[t3];
+      ti2:=wa1[i-2]*cc[t3]-wa1[i-1]*cc[t3-1];
+      ch[t6]:=cc[t5]+ti2;
+      ch[t4]:=ti2-cc[t5];
+      ch[t6-1]:=cc[t5-1]+tr2;
+      ch[t4-1]:=cc[t5-1]-tr2;
+      inc(i, 2);
+    end;
+    t1+=ido;
+    t2+=ido;
+  end;
+
+  if ((ido mod 2)=1) then Exit;
+
+ L105:
+  t1 := ido;
+  t2 := t1-1;
+  t3 := t2;
+  t2 += t0;
+  for k:=0 to l1-1 do
+  begin
+    ch[t1] := -cc[t2];
+    ch[t1-1]:=cc[t3];
+    t1+=ido shl 1;
+    t2+=ido;
+    t3+=ido;
+  end;
+end;
+
+
+procedure dradf4(ido, l1 : Integer; cc, ch, wa1, wa2, wa3 : pSingle);
+const hsqt2 : Single = 0.70710678118654752440084436210485;
+label L105;
+var
+  i,k,t0,t1,t2,t3,t4,t5,t6 : integer;
+  ci2,ci3,ci4,cr2,cr3,cr4,ti1,ti2,ti3,ti4,tr1,tr2,tr3,tr4 : Single;
+begin
+  t0 := l1*ido;
+
+  t1 := t0;
+  t4 := t1 shl 1;
+  t2 := t1+(t1 shl 1);
+  t3 := 0;
+
+  for k:=0 to l1-1 do
+  begin
+    tr1:=cc[t1]+cc[t2];
+    tr2:=cc[t3]+cc[t4];
+    t5 := t3 shl 2;
+    ch[t5] := tr1 + tr2;
+    ch[(ido shl 2)+t5-1] := tr2-tr1;
+    t5 += (ido shl 1);
+    ch[t5-1] := cc[t3]-cc[t4];
+    ch[t5] := cc[t2]-cc[t1];
+
+    t1 += ido;
+    t2 += ido;
+    t3 += ido;
+    t4 += ido;
+  end;
+
+  if (ido<2) then Exit;
+  if (ido=2) then goto L105;
+
+  t1 := 0;
+  for k:=0 to l1-1 do
+  begin
+    t2 := t1;
+    t4 := t1 shl 2;
+    t6 := ido shl 1;
+    t5 := t6 + t4;
+    i := 2;
+    while i < ido do
+    begin
+      t2 += 2;
+      t3 := t2;
+      t4 += 2;
+      t5 -= 2;
+
+      t3 += t0;
+      cr2 := wa1[i-2]*cc[t3-1]+wa1[i-1]*cc[t3];
+      ci2 := wa1[i-2]*cc[t3]-wa1[i-1]*cc[t3-1];
+      t3 += t0;
+      cr3 := wa2[i-2]*cc[t3-1]+wa2[i-1]*cc[t3];
+      ci3 := wa2[i-2]*cc[t3]-wa2[i-1]*cc[t3-1];
+      t3 += t0;
+      cr4 := wa3[i-2]*cc[t3-1]+wa3[i-1]*cc[t3];
+      ci4 := wa3[i-2]*cc[t3]-wa3[i-1]*cc[t3-1];
+
+      tr1 := cr2+cr4;
+      tr4 := cr4-cr2;
+      ti1 := ci2+ci4;
+      ti4 := ci2-ci4;
+      ti2 := cc[t2]+ci3;
+      ti3 := cc[t2]-ci3;
+      tr2 := cc[t2-1]+cr3;
+      tr3 := cc[t2-1]-cr3;
+
+
+      ch[t4-1] := tr1+tr2;
+      ch[t4] := ti1+ti2;
+
+      ch[t5-1] := tr3-ti4;
+      ch[t5] := tr4-ti3;
+
+      ch[t4+t6-1] := ti4+tr3;
+      ch[t4+t6] := tr4+ti3;
+
+      ch[t5+t6-1] := tr2-tr1;
+      ch[t5+t6] := ti1-ti2;
+
+      inc(i, 2);
+    end;
+    t1 += ido;
+  end;
+  if (ido mod 2) > 0 then Exit;
+
+ L105:
+
+  t1 := t0+ido-1;
+  t2 := t1+(t0 shl 1);
+  t3 := ido shl 2;
+  t4 := ido;
+  t5 := ido shl 1;
+  t6 := ido;
+
+  for k:=0 to l1-1 do
+  begin
+    ti1 := -hsqt2*(cc[t1]+cc[t2]);
+    tr1 := hsqt2*(cc[t1]-cc[t2]);
+    ch[t4-1] := tr1+cc[t6-1];
+    ch[t4+t5-1] := cc[t6-1]-tr1;
+    ch[t4] := ti1-cc[t1+t0];
+    ch[t4+t5] := ti1+cc[t1+t0];
+    t1 += ido;
+    t2 += ido;
+    t4 += t3;
+    t6 += ido;
+  end;
+end;
+
+procedure dradfg(ido, ip, l1, idl1 : Integer; cc, c1, c2, ch, ch2, wa : pSingle);
+const tpi : Single = 6.28318530717958647692528676655900577;
+label L119, L132, L135, L141;
+var
+  idij,ipph,i,j,k,l,ic,ik,isv,
+  t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,t10 : integer;
+  dc2,ai1,ai2,ar1,ar2,ds2 : Single;
+
+  nbd : integer;
+  dcp,arg,dsp,ar1h,ar2h : Single;
+  idp2,ipp2 : integer;
+begin
+  arg := tpi/Single(ip);
+  dcp := cos(arg);
+  dsp := sin(arg);
+  ipph := (ip+1) shr 1;
+  ipp2 := ip;
+  idp2 := ido;
+  nbd := (ido-1) shr 1;
+  t0 := l1*ido;
+  t10 := ip*ido;
+
+  if(ido=1) then goto L119;
+  for ik:=0 to idl1-1 do ch2[ik] := c2[ik];
+
+  t1 := 0;
+  for j := 1 to ip-1 do
+  begin
+    t1 += t0;
+    t2 := t1;
+    for k:=0 to l1-1 do
+    begin
+      ch[t2] := c1[t2];
+      t2 += ido;
+    end;
+  end;
+
+  isv := -ido;
+  t1 := 0;
+  if (nbd > l1) then
+  begin
+    for j:=1 to ip-1 do
+    begin
+      t1 += t0;
+      isv += ido;
+      t2 := -ido+t1;
+      for k:=0 to l1-1 do
+      begin
+	idij := isv-1;
+	t2 += ido;
+	t3 := t2;
+        i:=2;
+	while i<ido do
+        begin
+	  idij += 2;
+	  t3 += 2;
+	  ch[t3-1] := wa[idij-1]*c1[t3-1]+wa[idij]*c1[t3];
+	  ch[t3] := wa[idij-1]*c1[t3]-wa[idij]*c1[t3-1];
+          inc(i, 2);
+        end;
+      end;
+    end;
+  end else begin
+
+    for j:=1 to ip-1 do
+    begin
+      isv += ido;
+      idij := isv-1;
+      t1 += t0;
+      t2 := t1;
+      i := 2;
+      while i<ido do
+      begin
+	idij += 2;
+	t2 += 2;
+	t3 := t2;
+	for k:=0 to l1-1 do
+        begin
+	  ch[t3-1] := wa[idij-1]*c1[t3-1]+wa[idij]*c1[t3];
+	  ch[t3] := wa[idij-1]*c1[t3]-wa[idij]*c1[t3-1];
+	  t3 += ido;
+	end;
+        inc(i, 2);
+      end;
+    end;
+  end;
+
+  t1 := 0;
+  t2 := ipp2*t0;
+  if (nbd<l1) then
+  begin
+    for j:=1 to ipph-1 do
+    begin
+      t1 += t0;
+      t2 -= t0;
+      t3 := t1;
+      t4 := t2;
+      i := 2;
+      while i<ido do
+      begin
+	t3 += 2;
+	t4 += 2;
+	t5 := t3-ido;
+	t6 := t4-ido;
+	for k:=0 to l1-1 do
+        begin
+	  t5 += ido;
+	  t6 += ido;
+	  c1[t5-1] := ch[t5-1]+ch[t6-1];
+	  c1[t6-1] := ch[t5]-ch[t6];
+	  c1[t5] := ch[t5]+ch[t6];
+	  c1[t6] := ch[t6-1]-ch[t5-1];
+        end;
+        inc(i, 2);
+      end;
+    end;
+  end else begin
+    for j:=1 to ipph-1 do
+    begin
+      t1 += t0;
+      t2 -= t0;
+      t3 := t1;
+      t4 := t2;
+      for k:=0 to l1-1 do
+      begin
+	t5 := t3;
+	t6 := t4;
+        i := 2;
+	while i<ido do
+        begin
+	  t5 += 2;
+	  t6 += 2;
+	  c1[t5-1] := ch[t5-1]+ch[t6-1];
+	  c1[t6-1] := ch[t5]-ch[t6];
+	  c1[t5] := ch[t5]+ch[t6];
+	  c1[t6] := ch[t6-1]-ch[t5-1];
+          inc(i, 2);
+	end;
+	t3 += ido;
+	t4 += ido;
+      end;
+    end;
+  end;
+
+L119:
+  for ik:=0 to idl1-1 do c2[ik] := ch2[ik];
+
+  t1 := 0;
+  t2 := ipp2*idl1;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1-ido;
+    t4 := t2-ido;
+    for k:=0 to l1-1 do
+    begin
+      t3 += ido;
+      t4 += ido;
+      c1[t3] := ch[t3]+ch[t4];
+      c1[t4] := ch[t4]-ch[t3];
+    end;
+  end;
+
+  ar1 := 1.0;
+  ai1 := 0.0;
+  t1 := 0;
+  t2 := ipp2*idl1;
+  t3 := (ip-1)*idl1;
+  for l:=1 to ipph-1 do
+  begin
+    t1 += idl1;
+    t2 -= idl1;
+    ar1h := dcp*ar1-dsp*ai1;
+    ai1 := dcp*ai1+dsp*ar1;
+    ar1 := ar1h;
+    t4 := t1;
+    t5 := t2;
+    t6 := t3;
+    t7 := idl1;
+
+    for ik:=0 to idl1-1 do
+    begin
+      ch2[t4] := c2[ik]+ar1*c2[t7];
+      inc(t4); inc(t7);
+      ch2[t5] := ai1*c2[t6];
+      inc(t5); inc(t6);
+    end;
+
+    dc2 := ar1;
+    ds2 := ai1;
+    ar2 := ar1;
+    ai2 := ai1;
+
+    t4 := idl1;
+    t5 := (ipp2-1)*idl1;
+    j := 2;
+    while j<ipph do
+    begin
+      t4 += idl1;
+      t5 -= idl1;
+
+      ar2h := dc2*ar2-ds2*ai2;
+      ai2 := dc2*ai2+ds2*ar2;
+      ar2 := ar2h;
+
+      t6 := t1;
+      t7 := t2;
+      t8 := t4;
+      t9 := t5;
+      for ik:=0 to idl1-1 do
+      begin
+	ch2[t6] += ar2*c2[t8];
+        inc(t6); inc(t8);
+	ch2[t7] += ai2*c2[t9];
+        inc(t7); inc(t9);
+      end;
+      inc(j, 2);
+    end;
+  end;
+
+  t1 := 0;
+  for j := 1 to ipph-1 do
+  begin
+    t1 += idl1;
+    t2 := t1;
+    for ik:=0 to idl1 -1 do begin
+      ch2[ik] += c2[t2];
+      inc(t2);
+    end;
+  end;
+
+  if (ido<l1) then goto L132;
+
+  t1 := 0;
+  t2 := 0;
+  for k:=0 to l1-1 do
+  begin
+    t3 := t1;
+    t4 := t2;
+    for i:=0 to ido-1 do
+    begin
+      cc[t4] := ch[t3];
+      inc(t4); inc(t3);
+    end;
+    t1 += ido;
+    t2 += t10;
+  end;
+
+  goto L135;
+
+ L132:
+  for i:=0 to ido-1 do
+  begin
+    t1 := i;
+    t2 := i;
+    for k:=0 to l1-1 do
+    begin
+      cc[t2] := ch[t1];
+      t1 += ido;
+      t2 += t10;
+    end;
+  end;
+
+ L135:
+  t1 := 0;
+  t2 := ido shl 1;
+  t3 := 0;
+  t4 := ipp2*t0;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t2;
+    t3 += t0;
+    t4 -= t0;
+
+    t5 := t1;
+    t6 := t3;
+    t7 := t4;
+
+    for k:=0 to l1-1 do
+    begin
+      cc[t5-1] := ch[t6];
+      cc[t5] := ch[t7];
+      t5 += t10;
+      t6 += ido;
+      t7 += ido;
+    end;
+  end;
+
+  if ido=1 then Exit;
+  if nbd<l1 then goto L141;
+
+  t1 := -ido;
+  t3 := 0;
+  t4 := 0;
+  t5 := ipp2*t0;
+  for j :=1 to ipph-1 do
+  begin
+    t1 += t2;
+    t3 += t2;
+    t4 += t0;
+    t5 -= t0;
+    t6 := t1;
+    t7 := t3;
+    t8 := t4;
+    t9 := t5;
+    for k:=0 to l1-1 do
+    begin
+      i := 2;
+      while i<ido do
+      begin
+	ic := idp2-i;
+	cc[i+t7-1] := ch[i+t8-1]+ch[i+t9-1];
+	cc[ic+t6-1] := ch[i+t8-1]-ch[i+t9-1];
+	cc[i+t7] := ch[i+t8]+ch[i+t9];
+	cc[ic+t6] := ch[i+t9]-ch[i+t8];
+        inc(i, 2);
+      end;
+      t6 += t10;
+      t7 += t10;
+      t8 += ido;
+      t9 += ido;
+    end;
+  end;
+  Exit;
+
+ L141:
+
+  t1 := -ido;
+  t3 := 0;
+  t4 := 0;
+  t5 := ipp2*t0;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t2;
+    t3 += t2;
+    t4 += t0;
+    t5 -= t0;
+    i := 2;
+    while i<ido do
+    begin
+      t6 := idp2+t1-i;
+      t7 := i+t3;
+      t8 := i+t4;
+      t9 := i+t5;
+      for k:=0 to l1-1 do
+      begin
+	cc[t7-1] := ch[t8-1]+ch[t9-1];
+	cc[t6-1] := ch[t8-1]-ch[t9-1];
+	cc[t7] := ch[t8]+ch[t9];
+	cc[t6] := ch[t9]-ch[t8];
+	t6 += t10;
+	t7 += t10;
+	t8 += ido;
+	t9 += ido;
+      end;
+      inc(i, 2);
+    end;
+  end;
+end;
+
+procedure drftf1(n : integer; c, ch, wa : pSingle; ifac : pInteger);
+label L102, L110, L104, L103, L109;
+var
+  i,k1,l1,l2,
+  na,kh,nf,
+  ip,iw,ido,idl1,ix2,ix3 : integer;
+begin
+  nf := ifac[1];
+  na := 1;
+  l2 := n;
+  iw := n;
+
+  for k1:=0 to nf-1 do
+  begin
+    kh := nf-k1;
+    ip := ifac[kh+1];
+    l1 := l2 div ip;
+    ido := n div l2;
+    idl1 := ido*l1;
+    iw -= (ip-1)*ido;
+    na := 1-na;
+
+    if (ip<>4) then goto L102;
+
+    ix2 := iw + ido;
+    ix3 := ix2 + ido;
+    if na<>0 then
+      dradf4(ido,l1,ch,c,wa+iw-1,wa+ix2-1,wa+ix3-1)
+    else
+      dradf4(ido,l1,c,ch,wa+iw-1,wa+ix2-1,wa+ix3-1);
+    goto L110;
+
+ L102:
+    if (ip<>2) then goto L104;
+    if (na<>0) then goto L103;
+
+    dradf2(ido,l1,c,ch,wa+iw-1);
+    goto L110;
+
+  L103:
+    dradf2(ido,l1,ch,c,wa+iw-1);
+    goto L110;
+
+  L104:
+    if (ido=1) then na := 1-na;
+    if (na<>0) then goto L109;
+
+    dradfg(ido,ip,l1,idl1,c,c,c,ch,ch,wa+iw-1);
+    na := 1;
+    goto L110;
+
+  L109:
+    dradfg(ido,ip,l1,idl1,ch,ch,ch,c,c,wa+iw-1);
+    na := 0;
+
+  L110:
+    l2 := l1;
+  end;
+
+  if (na=1) then Exit;
+
+  for i:=0 to n-1 do c[i] := ch[i];
+end;
+
+procedure __ogg_fdrfftf(n : integer; r, wsave : pSingle; ifac : pInteger);
+begin
+  if (n=1) then Exit;
+  drftf1(n,r,wsave,wsave+n,ifac);
+end;
+
+procedure dcsqf1(n : integer; x, w, xh : pSingle; ifac : pInteger);
+var
+  modn,i,k,kc,np2,ns2 : integer;
+  xim1 : Single;
+begin
+  ns2 := (n+1) shr 1;
+  np2 := n;
+
+  kc := np2;
+  for k:=1 to ns2-1 do
+  begin
+    Dec(kc);
+    xh[k] := x[k]+x[kc];
+    xh[kc] := x[k]-x[kc];
+  end;
+
+  modn := n mod 2;
+  if (modn=0) then xh[ns2] := x[ns2]+x[ns2];
+
+  for k:=1 to ns2-1 do
+  begin
+    kc := np2-k;
+    x[k] := w[k-1]*xh[kc]+w[kc-1]*xh[k];
+    x[kc] := w[k-1]*xh[k]-w[kc-1]*xh[kc];
+  end;
+
+  if (modn=0) then x[ns2] := w[ns2-1]*xh[ns2];
+
+  __ogg_fdrfftf(n,x,xh,ifac);
+
+  i := 2;
+  while i<n do
+  begin
+    xim1 := x[i-1]-x[i];
+    x[i] := x[i-1]+x[i];
+    x[i-1] := xim1;
+    inc(i, 2);
+  end;
+end;
+
+procedure __ogg_fdcosqf(n : integer; x, wsave : pSingle; ifac : pInteger);
+const sqrt2 : Single = 1.4142135623730950488016887242097;
+var
+  tsqx : Single;
+begin
+  case (n) of
+   0, 1:
+    begin
+      Exit;
+    end;
+   2:
+    begin
+      tsqx := sqrt2*x[1];
+      x[1] := x[0]-tsqx;
+      x[0] += tsqx;
+      Exit;
+    end
+  else
+    dcsqf1(n,x,wsave,wsave+n,ifac);
+    Exit;
+  end;
+end;
+
+procedure dradb2(ido, l1 : integer; cc, ch, wa1 : pSingle);
+label L105;
+var
+   i,k,t0,t1,t2,t3,t4,t5,t6 : integer;
+   ti2,tr2 : Single;
+begin
+  t0 := l1*ido;
+
+  t1 := 0;
+  t2 := 0;
+  t3 := (ido shl 1)-1;
+  for k:=0 to l1-1 do
+  begin
+    ch[t1] := cc[t2]+cc[t3+t2];
+    ch[t1+t0] := cc[t2]-cc[t3+t2];
+    t1 += ido;
+    t2 := (t1) shl 1;
+  end;
+
+  if (ido<2) then Exit;
+  if (ido=2) then goto L105;
+
+  t1 := 0;
+  t2 := 0;
+  for k:=0 to l1-1 do
+  begin
+    t3 := t1;
+    t4 := t2;
+    t5 := (t4)+(ido shl 1);
+    t6 := t0+t1;
+    i := 2;
+    while i<ido do
+    begin
+      t3 += 2;
+      t4 += 2;
+      t5 -= 2;
+      t6 += 2;
+      ch[t3-1] := cc[t4-1]+cc[t5-1];
+      tr2 := cc[t4-1]-cc[t5-1];
+      ch[t3] := cc[t4]-cc[t5];
+      ti2 := cc[t4]+cc[t5];
+      ch[t6-1] := wa1[i-2]*tr2-wa1[i-1]*ti2;
+      ch[t6] := wa1[i-2]*ti2+wa1[i-1]*tr2;
+      inc(i, 2);
+    end;
+    t1 += ido;
+    t2 := (t1) shl 1;
+  end;
+
+  if ((ido mod 2) > 0) then Exit;
+
+L105:
+  t1 := ido-1;
+  t2 := ido-1;
+  for k:=0 to l1-1 do
+  begin
+    ch[t1] := cc[t2]+cc[t2];
+    ch[t1+t0] := -(cc[t2+1]+cc[t2+1]);
+    t1 += ido;
+    t2 += ido shl 1;
+  end;
+end;
+
+procedure dradb3(ido, l1 : integer; cc, ch, wa1, wa2 : pSingle);
+const taur : Single = -0.5;
+const taui : Single = 0.86602540378443864676372317075293618;
+var
+  i,k,t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,t10 : integer;
+  ci2,ci3,di2,di3,cr2,cr3,dr2,dr3,ti2,tr2 : Single;
+begin
+  t0 := l1*ido;
+
+  t1 := 0;
+  t2 := t0 shl 1;
+  t3 := ido shl 1;
+  t4 := ido + (ido shl 1);
+  t5 := 0;
+  for k:=0 to l1-1 do
+  begin
+    tr2 := cc[t3-1]+cc[t3-1];
+    cr2 := cc[t5]+(taur*tr2);
+    ch[t1] := cc[t5]+tr2;
+    ci3 := taui*(cc[t3]+cc[t3]);
+    ch[t1+t0] := cr2-ci3;
+    ch[t1+t2] := cr2+ci3;
+    t1 += ido;
+    t3 += t4;
+    t5 += t4;
+  end;
+
+  if (ido=1) then Exit;
+
+  t1 := 0;
+  t3 := ido shl 1;
+  for k := 0 to l1-1 do
+  begin
+    t7 := t1+(t1 shl 1);
+    t5 := t7+t3;
+    t6 := t5;
+    t8 := t1;
+    t9 := t1+t0;
+    t10 := (t9)+t0;
+
+    i := 2;
+    while i<ido do
+    begin
+      t5 += 2;
+      t6 -= 2;
+      t7 += 2;
+      t8 += 2;
+      t9 += 2;
+      t10 += 2;
+      tr2 := cc[t5-1]+cc[t6-1];
+      cr2 := cc[t7-1]+(taur*tr2);
+      ch[t8-1] := cc[t7-1]+tr2;
+      ti2 := cc[t5]-cc[t6];
+      ci2 := cc[t7]+(taur*ti2);
+      ch[t8] := cc[t7]+ti2;
+      cr3 := taui*(cc[t5-1]-cc[t6-1]);
+      ci3 := taui*(cc[t5]+cc[t6]);
+      dr2 := cr2-ci3;
+      dr3 := cr2+ci3;
+      di2 := ci2+cr3;
+      di3 := ci2-cr3;
+      ch[t9-1] := wa1[i-2]*dr2-wa1[i-1]*di2;
+      ch[t9] := wa1[i-2]*di2+wa1[i-1]*dr2;
+      ch[t10-1] := wa2[i-2]*dr3-wa2[i-1]*di3;
+      ch[t10] := wa2[i-2]*di3+wa2[i-1]*dr3;
+      inc(i, 2);
+    end;
+    t1 += ido;
+  end;
+end;
+
+procedure dradb4(ido, l1 : integer; cc, ch, wa1, wa2, wa3 : pSingle);
+const sqrt2 : Single = 1.4142135623730950488016887242097;
+label L105;
+var
+  i,k,t0,t1,t2,t3,t4,t5,t6,t7,t8 : integer;
+  ci2,ci3,ci4,cr2,cr3,cr4,ti1,ti2,ti3,ti4,tr1,tr2,tr3,tr4 : Single;
+begin
+  t0 := l1*ido;
+
+  t1 := 0;
+  t2 := ido shl 2;
+  t3 := 0;
+  t6 := ido shl 1;
+  for k:=0 to l1-1 do
+  begin
+    t4 := t3+t6;
+    t5 := t1;
+    tr3 := cc[t4-1]+cc[t4-1];
+    tr4 := cc[t4]+cc[t4];
+    t4 += t6;
+    tr1 := cc[t3]-cc[t4-1];
+    tr2 := cc[t3]+cc[t4-1];
+    ch[t5] := tr2+tr3;
+    t5 += t0;
+    ch[t5] := tr1-tr4;
+    t5 += t0;
+    ch[t5] := tr2-tr3;
+    t5 += t0;
+    ch[t5] := tr1+tr4;
+    t1 += ido;
+    t3 += t2;
+  end;
+
+  if (ido<2) then Exit;
+  if (ido=2) then goto L105;
+
+  t1 := 0;
+  for k:=0 to l1-1 do
+  begin
+    t2 := t1 shl 2;
+    t3 := t2+t6;
+    t4 := t3;
+    t5 := t4+t6;
+    t7 := t1;
+    i := 2;
+    while i<ido do
+    begin
+      t2 += 2;
+      t3 += 2;
+      t4 -= 2;
+      t5 -= 2;
+      t7 += 2;
+      ti1 := cc[t2]+cc[t5];
+      ti2 := cc[t2]-cc[t5];
+      ti3 := cc[t3]-cc[t4];
+      tr4 := cc[t3]+cc[t4];
+      tr1 := cc[t2-1]-cc[t5-1];
+      tr2 := cc[t2-1]+cc[t5-1];
+      ti4 := cc[t3-1]-cc[t4-1];
+      tr3 := cc[t3-1]+cc[t4-1];
+      ch[t7-1] := tr2+tr3;
+      cr3 := tr2-tr3;
+      ch[t7] := ti2+ti3;
+      ci3 := ti2-ti3;
+      cr2 := tr1-tr4;
+      cr4 := tr1+tr4;
+      ci2 := ti1+ti4;
+      ci4 := ti1-ti4;
+
+      t8 := t7+t0;
+      ch[t8-1] := wa1[i-2]*cr2-wa1[i-1]*ci2;
+      ch[t8] := wa1[i-2]*ci2+wa1[i-1]*cr2;
+      t8 += t0;
+      ch[t8-1] := wa2[i-2]*cr3-wa2[i-1]*ci3;
+      ch[t8] := wa2[i-2]*ci3+wa2[i-1]*cr3;
+      t8 += t0;
+      ch[t8-1] := wa3[i-2]*cr4-wa3[i-1]*ci4;
+      ch[t8] := wa3[i-2]*ci4+wa3[i-1]*cr4;
+
+      inc(i, 2);
+    end;
+    t1 += ido;
+  end;
+
+  if ((ido mod 2) > 0) then Exit;
+
+ L105:
+
+  t1 := ido;
+  t2 := ido shl 2;
+  t3 := ido - 1;
+  t4 := ido + (ido shl 1);
+  for k := 0 to l1-1 do
+  begin
+    t5 := t3;
+    ti1 := cc[t1]+cc[t4];
+    ti2 := cc[t4]-cc[t1];
+    tr1 := cc[t1-1]-cc[t4-1];
+    tr2 := cc[t1-1]+cc[t4-1];
+    ch[t5] := tr2+tr2;
+    t5 += t0;
+    ch[t5] := sqrt2*(tr1-ti1);
+    t5 += t0;
+    ch[t5] := ti2+ti2;
+    t5 += t0;
+    ch[t5] := -sqrt2*(tr1+ti1);
+
+    t3 += ido;
+    t1 += t2;
+    t4 += t2;
+  end;
+end;
+
+procedure dradbg(ido, ip, l1, idl1 : integer; cc, c1, c2, ch, ch2, wa : pSingle);
+const tpi : Single = 6.28318530717958647692528676655900577;
+label L103, L106, L112, L116, L132, L128, L139;
+var
+   idij,ipph,i,j,k,l,ik,isv,t0,t1,t2,t3,t4,t5,t6,t7,t8,t9,t10,
+         t11,t12 : integer;
+   dc2,ai1,ai2,ar1,ar2,ds2 : Single;
+   nbd : integer;
+   dcp,arg,dsp,ar1h,ar2h : Single;
+   ipp2 : integer;
+begin
+  t10 := ip*ido;
+  t0 := l1*ido;
+  arg := tpi/single(ip);
+  dcp := cos(arg);
+  dsp := sin(arg);
+  nbd := (ido-1) shr 1;
+  ipp2 := ip;
+  ipph := (ip+1) shr 1;
+  if (ido<l1) then goto L103;
+
+  t1 := 0;
+  t2 := 0;
+  for k := 0 to l1-1 do
+  begin
+    t3 := t1;
+    t4 := t2;
+    for i := 0 to ido-1 do
+    begin
+      ch[t3] := cc[t4];
+      inc(t3);
+      inc(t4);
+    end;
+    t1 += ido;
+    t2 += t10;
+  end;
+  goto L106;
+
+ L103:
+  t1 := 0;
+  for i:=0 to ido-1 do
+  begin
+    t2 := t1;
+    t3 := t1;
+    for k:=0 to l1-1 do
+    begin
+      ch[t2] := cc[t3];
+      t2 += ido;
+      t3 += t10;
+    end;
+    inc(t1);
+  end;
+
+ L106:
+  t1 := 0;
+  t2 := ipp2*t0;
+  t5 := ido shl 1;
+  t7 := t5;
+  for j := 1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1;
+    t4 := t2;
+    t6 := t5;
+    for k:=0 to l1-1 do
+    begin
+      ch[t3] := cc[t6-1]+cc[t6-1];
+      ch[t4] := cc[t6]+cc[t6];
+      t3 += ido;
+      t4 += ido;
+      t6 += t10;
+    end;
+    t5 += t7;
+  end;
+
+  if (ido = 1) then goto L116;
+  if (nbd<l1) then goto L112;
+
+  t1 := 0;
+  t2 := ipp2*t0;
+  t7 := 0;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1;
+    t4 := t2;
+
+    t7 += (ido shl 1);
+    t8 := t7;
+    for k:=0 to l1-1 do
+    begin
+      t5 := t3;
+      t6 := t4;
+      t9 := t8;
+      t11 := t8;
+      i := 2;
+      while i<ido do
+      begin
+	t5 += 2;
+	t6 += 2;
+	t9 += 2;
+	t11 -= 2;
+	ch[t5-1] := cc[t9-1]+cc[t11-1];
+	ch[t6-1] := cc[t9-1]-cc[t11-1];
+	ch[t5] := cc[t9]-cc[t11];
+	ch[t6] := cc[t9]+cc[t11];
+        inc(i, 2);
+      end;
+      t3 += ido;
+      t4 += ido;
+      t8 += t10;
+    end;
+  end;
+  goto L116;
+
+ L112:
+  t1 := 0;
+  t2 := ipp2*t0;
+  t7 := 0;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1;
+    t4 := t2;
+    t7 += (ido shl 1);
+    t8 := t7;
+    t9 := t7;
+    i := 2;
+    while i<ido do
+    begin
+      t3 += 2;
+      t4 += 2;
+      t8 += 2;
+      t9 -= 2;
+      t5 := t3;
+      t6 := t4;
+      t11 := t8;
+      t12 := t9;
+      for k:=0 to l1-1 do
+      begin
+	ch[t5-1] := cc[t11-1]+cc[t12-1];
+	ch[t6-1] := cc[t11-1]-cc[t12-1];
+	ch[t5] := cc[t11]-cc[t12];
+	ch[t6] := cc[t11]+cc[t12];
+	t5 += ido;
+	t6 += ido;
+	t11 += t10;
+	t12 += t10;
+      end;
+      inc(i, 2);
+    end;
+  end;
+
+L116:
+  ar1 := 1.0;
+  ai1 := 0.0;
+  t1 := 0;
+  t2 := ipp2*idl1;
+  t9 := t2;
+  t3 := (ip-1)*idl1;
+  for l:=1 to ipph-1 do
+  begin
+    t1 += idl1;
+    t2 -= idl1;
+
+    ar1h := dcp*ar1-dsp*ai1;
+    ai1 := dcp*ai1+dsp*ar1;
+    ar1 := ar1h;
+    t4 := t1;
+    t5 := t2;
+    t6 := 0;
+    t7 := idl1;
+    t8 := t3;
+    for ik:=0 to idl1-1 do
+    begin
+      c2[t4] := ch2[t6]+ar1*ch2[t7];
+      inc(t4); inc(t6); inc(t7);
+      c2[t5] := ai1*ch2[t8];
+      inc(t5); inc(t8);
+    end;
+    dc2 := ar1;
+    ds2 := ai1;
+    ar2 := ar1;
+    ai2 := ai1;
+
+    t6 := idl1;
+    t7 := t9-idl1;
+    i := 2;
+    while j<ipph do
+    begin
+      t6 += idl1;
+      t7 -= idl1;
+      ar2h := dc2*ar2-ds2*ai2;
+      ai2 := dc2*ai2+ds2*ar2;
+      ar2 := ar2h;
+      t4 := t1;
+      t5 := t2;
+      t11 := t6;
+      t12 := t7;
+      for ik := 0 to idl1-1 do
+      begin
+	c2[t4] += ar2*ch2[t11];
+        inc(t4); inc(t11);
+	c2[t5] += ai2*ch2[t12];
+        inc(t4); inc(t12);
+      end;
+      inc(i, 2);
+    end;
+  end;
+
+  t1 := 0;
+  for j := 1 to ipph-1 do
+  begin
+    t1 += idl1;
+    t2 := t1;
+    for ik:=0 to idl1-1 do
+    begin
+      ch2[ik] += ch2[t2];
+      inc(t2);
+    end;
+  end;
+
+  t1 := 0;
+  t2 := ipp2*t0;
+  for j := 1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1;
+    t4 := t2;
+    for k:=0 to l1-1 do
+    begin
+      ch[t3] := c1[t3]-c1[t4];
+      ch[t4] := c1[t3]+c1[t4];
+      t3 += ido;
+      t4 += ido;
+    end;
+  end;
+
+  if (ido=1) then goto L132;
+  if (nbd<l1) then goto L128;
+
+  t1 := 0;
+  t2 := ipp2*t0;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1;
+    t4 := t2;
+    for k:=0 to l1-1 do
+    begin
+      t5 := t3;
+      t6 := t4;
+      i := 2;
+      while i<ido do
+      begin
+	t5 += 2;
+	t6 += 2;
+	ch[t5-1] := c1[t5-1]-c1[t6];
+	ch[t6-1] := c1[t5-1]+c1[t6];
+	ch[t5] := c1[t5]+c1[t6-1];
+	ch[t6] := c1[t5]-c1[t6-1];
+        inc(i, 2);
+      end;
+      t3 += ido;
+      t4 += ido;
+    end;
+  end;
+  goto L132;
+
+ L128:
+  t1 := 0;
+  t2 := ipp2*t0;
+  for j:=1 to ipph-1 do
+  begin
+    t1 += t0;
+    t2 -= t0;
+    t3 := t1;
+    t4 := t2;
+    i := 2;
+    while i<ido do
+    begin
+      t3 += 2;
+      t4 += 2;
+      t5 := t3;
+      t6 := t4;
+      for k:=0 to l1-1 do
+      begin
+	ch[t5-1] := c1[t5-1]-c1[t6];
+	ch[t6-1] := c1[t5-1]+c1[t6];
+	ch[t5] := c1[t5]+c1[t6-1];
+	ch[t6] := c1[t5]-c1[t6-1];
+	t5 += ido;
+	t6 += ido;
+      end;
+      inc(i, 2);
+    end;
+  end;
+
+L132:
+  if (ido=1) then Exit;
+
+  for ik:=0 to idl1-1 do
+     c2[ik] := ch2[ik];
+
+  t1 := 0;
+  for j:=1 to ip-1 do
+  begin
+    t1 += t0;
+    t2 := t1;
+    for k:=0 to l1-1 do
+    begin
+      c1[t2] := ch[t2];
+      t2 += ido;
+    end;
+  end;
+
+  if (nbd>l1) then goto L139;
+
+  isv := -ido-1;
+  t1 := 0;
+  for j:=1 to ip-1 do
+  begin
+    isv += ido;
+    t1 += t0;
+    idij := isv;
+    t2 := t1;
+    i := 2;
+    while i<ido do
+    begin
+      t2 += 2;
+      idij += 2;
+      t3 := t2;
+      for k:=0 to l1-1 do
+      begin
+	c1[t3-1] := wa[idij-1]*ch[t3-1]-wa[idij]*ch[t3];
+	c1[t3] := wa[idij-1]*ch[t3]+wa[idij]*ch[t3-1];
+	t3 += ido;
+      end;
+      inc(i, 2);
+    end;
+  end;
+  Exit;
+
+ L139:
+  isv := -ido-1;
+  t1 := 0;
+  for j:=1 to ip-1 do
+  begin
+    isv += ido;
+    t1 += t0;
+    t2 := t1;
+    for k:=0 to l1-1 do
+    begin
+      idij := isv;
+      t3 := t2;
+      i := 2;
+      while i<ido do
+      begin
+	idij += 2;
+	t3 += 2;
+	c1[t3-1] := wa[idij-1]*ch[t3-1]-wa[idij]*ch[t3];
+	c1[t3] := wa[idij-1]*ch[t3]+wa[idij]*ch[t3-1];
+        inc(i, 2);
+      end;
+      t2+=ido;
+    end;
+  end;
+end;
+
+procedure drftb1(n : integer; c, ch, wa : pSingle; ifac : pInteger);
+label L103, L106, L109, L115;
+var
+   i,k1,l1,l2,
+   na,
+   nf,ip,iw,ix2,ix3,ido,idl1 : integer;
+begin
+  nf := ifac[1];
+  na := 0;
+  l1 := 1;
+  iw := 1;
+
+  for k1 :=0 to nf-1 do
+  begin
+    ip := ifac[k1 + 2];
+    l2 := ip*l1;
+    ido := n div l2;
+    idl1 := ido*l1;
+    if (ip<>4) then goto L103;
+    ix2 := iw+ido;
+    ix3 := ix2+ido;
+
+    if (na<>0) then
+      dradb4(ido,l1,ch,c,wa+iw-1,wa+ix2-1,wa+ix3-1)
+    else
+      dradb4(ido,l1,c,ch,wa+iw-1,wa+ix2-1,wa+ix3-1);
+    na := 1-na;
+    goto L115;
+
+  L103:
+    if (ip<>2) then goto L106;
+
+    if(na <> 0) then
+      dradb2(ido,l1,ch,c,wa+iw-1)
+    else
+      dradb2(ido,l1,c,ch,wa+iw-1);
+    na := 1-na;
+    goto L115;
+
+  L106:
+    if (ip<>3) then goto L109;
+
+    ix2 := iw+ido;
+    if (na <> 0) then
+      dradb3(ido,l1,ch,c,wa+iw-1,wa+ix2-1)
+    else
+      dradb3(ido,l1,c,ch,wa+iw-1,wa+ix2-1);
+    na := 1 - na;
+    goto L115;
+
+  L109:
+(*    The radix five case can be translated later..... *)
+(*    if(ip!=5)goto L112;
+
+    ix2=iw+ido;
+    ix3=ix2+ido;
+    ix4=ix3+ido;
+    if(na!=0)
+      dradb5(ido,l1,ch,c,wa+iw-1,wa+ix2-1,wa+ix3-1,wa+ix4-1);
+    else
+      dradb5(ido,l1,c,ch,wa+iw-1,wa+ix2-1,wa+ix3-1,wa+ix4-1);
+    na=1-na;
+    goto L115;
+
+  L112:*)
+    if (na<>0) then
+      dradbg(ido,ip,l1,idl1,ch,ch,ch,c,c,wa+iw-1)
+    else
+      dradbg(ido,ip,l1,idl1,c,c,c,ch,ch,wa+iw-1);
+    if(ido=1) then na := 1-na;
+
+  L115:
+    l1 := l2;
+    iw += (ip-1)*ido;
+  end;
+
+  if(na=0) then Exit;
+
+  for i :=0 to n-1 do c[i]:=ch[i];
+end;
+
+procedure __ogg_fdrfftb(n : integer; r, wsave : pSingle; ifac : pInteger);
+begin
+  if (n = 1) then Exit;
+  drftb1(n, r, wsave, wsave+n, ifac);
+end;
+
+procedure dcsqb1(n : integer; x, w, xh : pSingle; ifac : pInteger);
+var
+   modn,i,k,kc,
+   np2,ns2 : integer;
+   xim1 : Single;
+begin
+  ns2 := (n+1) shr 1;
+  np2 := n;
+
+  i := 2;
+  while i<n do
+  begin
+    xim1 := x[i-1]+x[i];
+    x[i] -= x[i-1];
+    x[i-1] := xim1;
+    inc(i, 2);
+  end;
+
+  x[0] += x[0];
+  modn := n mod 2;
+  if (modn=0) then x[n-1] += x[n-1];
+
+  __ogg_fdrfftb(n,x,xh,ifac);
+
+  kc := np2;
+  for k :=1 to ns2-1 do
+  begin
+    Dec(kc);
+    xh[k] := w[k-1]*x[kc]+w[kc-1]*x[k];
+    xh[kc] := w[k-1]*x[k]-w[kc-1]*x[kc];
+  end;
+
+  if (modn=0) then x[ns2] := w[ns2-1]*(x[ns2]+x[ns2]);
+
+  kc := np2;
+  for k:=1 to ns2-1 do
+  begin
+    Dec(kc);
+    x[k] := xh[k]+xh[kc];
+    x[kc] := xh[k]-xh[kc];
+  end;
+  x[0] += x[0];
+end;
+
+procedure __ogg_fdcosqb(n : integer; x, wsave : pSingle; ifac : pInteger);
+const tsqrt2 : Single = 2.8284271247461900976033774484194;
+var x1  : Single;
+begin
+  if (n<2) then
+  begin
+    x[0] := x[0] * 4;
+    Exit;
+  end;
+  if (n=2) then
+  begin
+    x1 := (x[0]+x[1])*4;
+    x[1] := tsqrt2*(x[0]-x[1]);
+    x[0] := x1;
+    Exit;
+  end;
+
+  dcsqb1(n,x,wsave,wsave+n,ifac);
+end;
+
+{$ENDREGION}
 
 { this part of the code is a direct translation into freepascal of the source
   code written in C
@@ -407,21 +2061,6 @@ end;
 function MULT16_32_Q15(a, b : Single) : Single; inline;
 begin
   Result := (a*b);
-end;
-
-function WORD2INT(x : Single) : spx_int16_t; inline;
-begin
-  if x < -32767.5 then
-     Result := -32768 else
-  begin
-    if x > 32766.5 then
-      Result := 32767 else
-    begin
-      if x < 0 then
-         Result := spx_int16_t(trunc(x - 0.5)) else
-         Result := spx_int16_t(trunc(0.5 + x));
-    end;
-  end;
 end;
 
 function resampler_basic_direct_single(st : pSpeexResamplerState;
@@ -1272,7 +2911,7 @@ begin
       j := 0;
       while j<(ochunk+omagic) do
       begin
-        outp[j*ostride_save] := WORD2INT(ystack[j]);
+        outp[j*ostride_save] := FLOAT2INT16(ystack[j]);
         Inc(j);
       end;
 

@@ -301,6 +301,43 @@ type
   function OutBufferSize : Int64;
   end;
 
+  { ISoundForwardTransformation }
+
+  ISoundForwardTransformation = interface
+  ['{8C3320F8-2BA7-43C8-97C5-4F0285F42E83}']
+  function  Init(aSamplesCount, aChannels : Cardinal) : Boolean;
+  procedure Done;
+
+  function  ReInit(aSamplesCount, aChannels : Cardinal) : Boolean;
+  procedure Process(aBuffer : PPointer; aSampleSize : TSoundSampleSize);
+  procedure ProcessInterleave(aBuffer : Pointer; aSampleSize : TSoundSampleSize);
+
+  function Ready : Boolean;
+  function Channels : Cardinal;
+  function SamplesCount : Cardinal;
+  function SpectreSize : Cardinal;
+  function OutputHarmonic(ch, n : integer) : TSoundComplexData;
+  function OutputRaw : PPointer;
+  end;
+
+  { ISoundBackwardTransformation }
+
+  ISoundBackwardTransformation = interface
+  ['{2A25BB74-67AC-4E26-872B-C016EEF22595}']
+  function  Init(aSpectreSize, aChannels : Cardinal) : Boolean;
+  procedure Done;
+
+  function  ReInit(aSpectreSize, aChannels : Cardinal) : Boolean;
+  procedure Process(aBuffer : PPointer);
+  procedure ProcessInterleave(aBuffer : PPointer);
+
+  function Ready : Boolean;
+  function Channels : Cardinal;
+  function SamplesCount : Cardinal;
+  function SpectreSize : Cardinal;
+  function Output : PPointer;
+  end;
+
   { TSoundProps }
 
   TSoundProps = class(TFastHashList, ISoundProps)
