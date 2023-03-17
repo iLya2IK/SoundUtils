@@ -1325,12 +1325,13 @@ end;
 
 procedure TVorbisComment.Init;
 begin
+  Done;
   fRef := TVorbisTags.Create;
 end;
 
 procedure TVorbisComment.Done;
 begin
-  fRef.Free;
+  if Assigned(fRef) then FreeAndNil(fRef);
 end;
 
 function TVorbisComment.GetVendor : String;

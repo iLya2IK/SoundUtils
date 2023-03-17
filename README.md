@@ -1,6 +1,9 @@
 # SoundUtils
 
 Utilities and abstract classes for working with sound, audio samples, audio streams, files, decoders and encoders.
+Integrated:
+* Fast discrete Fourier and cosine transforms and inverses
+* Speex resampling code
  
 ### Requirements
 
